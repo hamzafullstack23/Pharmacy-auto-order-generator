@@ -242,41 +242,45 @@ class SalesImportController extends Controller
     protected function commitBatch(ImportBatch $batch): array
     {
         $imported = 0;
-        $skipped = 0;
+        $skipped  = 0;
 
         DB::transaction(function () use ($batch, &$imported, &$skipped) {
             $batch->rows()
                 ->where('status', 'resolved')
                 ->orderBy('id')
-                ->chunkById(500, function ($rows) use (&$imported) {
+                ->chunkById(500, function ($rows) use (&$imported, &$skipped) {
                     foreach ($rows as $row) {
-                        $existing = DailySale::where('sale_date', $row->sale_date)
+                        // Exact duplicate check: same date + medicine + supplier + company + quantity
+                        $exists = DailySale::where('sale_date', $row->sale_date)
                             ->where('medicine_id', $row->medicine_id)
-                            ->first();
+                            ->where('supplier_id', $row->supplier_id)
+                            ->where('company_id',  $row->company_id)
+                            ->where('quantity_sold', $row->quantity)
+                            ->exists();
 
-                        if ($existing) {
-                            $existing->update([
-                                'quantity_sold' => $existing->quantity_sold + $row->quantity,
-                                'updated_at'    => now(),
+                        if ($exists) {
+                            $row->update([
+                                'status'        => 'skipped',
+                                'error_message' => 'Duplicate: identical sale already exists for this date/medicine/supplier/company/quantity',
                             ]);
-                        } else {
-                            DailySale::create([
-                                'sale_date'     => $row->sale_date,
-                                'medicine_name' => $row->product_name,
-                                'quantity_sold' => $row->quantity,
-                                'company_id'    => $row->company_id,
-                                'supplier_id'   => $row->supplier_id,
-                                'medicine_id'   => $row->medicine_id,
-                                'import_batch'  => $batch->batch_uuid,
-                            ]);
+                            $skipped++;
+                            continue;
                         }
+
+                        DailySale::create([
+                            'sale_date'     => $row->sale_date,
+                            'medicine_name' => $row->product_name,
+                            'quantity_sold' => $row->quantity,
+                            'company_id'    => $row->company_id,
+                            'supplier_id'   => $row->supplier_id,
+                            'medicine_id'   => $row->medicine_id,
+                            'import_batch'  => $batch->batch_uuid,
+                        ]);
 
                         $row->update(['status' => 'committed']);
                         $imported++;
                     }
                 });
-
-            $skipped = $batch->rows()->where('status', 'pending')->count();
 
             $batch->update([
                 'status' => 'committed',

@@ -26,18 +26,15 @@ Route::post('/logout', [LoginController::class, 'logout'])->name('logout')->midd
 // Protected Routes (require authentication)
 Route::middleware('auth')->group(function () {
 
-    Route::get('/sales/upload', [SalesImportController::class, 'showUploadForm'])->name('sales.upload');
-    Route::post('/sales/upload', [SalesImportController::class, 'upload'])->name('sales.upload.post');
-    Route::post('/sales/import/{batchUuid}/resume', [SalesImportController::class, 'resume'])->name('sales.import.resume');
-
-    Route::get('/sales/import/suppliers/search', [SalesImportController::class, 'searchSuppliers'])->name('sales.import.suppliers.search');
-    Route::get('/sales/import/companies/search', [SalesImportController::class, 'searchCompanies'])->name('sales.import.companies.search');
-    Route::get('/sales/import/medicines/search', [SalesImportController::class, 'searchMedicines'])->name('sales.import.medicines.search');
-
-    Route::post('/sales/import/suppliers', [SalesImportController::class, 'storeSupplier'])->name('sales.import.suppliers.store');
-    Route::post('/sales/import/companies', [SalesImportController::class, 'storeCompany'])->name('sales.import.companies.store');
-
-    Route::get('/sales/history', [SalesImportController::class, 'history'])->name('sales.history');
+    // routes/web.php — keep only these for the import feature
+Route::get('/sales/upload',                                 [SalesImportController::class, 'showUploadForm'])->name('sales.upload');
+Route::post('/sales/upload',                                [SalesImportController::class, 'upload'])->name('sales.upload.post');
+Route::post('/sales/import/{batchUuid}/resume',             [SalesImportController::class, 'resume'])->name('sales.import.resume');
+Route::post('/sales/import/{batchUuid}/resolve-medicine',   [SalesImportController::class, 'resolveMedicine'])->name('sales.import.resolve-medicine');
+Route::get('/sales/import/options',                         [SalesImportController::class, 'resolveOptions'])->name('sales.import.options');
+Route::post('/sales/import/companies',                      [SalesImportController::class, 'storeCompany'])->name('sales.import.companies.store');
+Route::post('/sales/import/suppliers',                      [SalesImportController::class, 'storeSupplier'])->name('sales.import.suppliers.store');
+Route::get('/sales/history',                                [SalesImportController::class, 'history'])->name('sales.history');
 
     // routes/web.php
 Route::get('/sales/import/options', [SalesImportController::class, 'resolveOptions'])

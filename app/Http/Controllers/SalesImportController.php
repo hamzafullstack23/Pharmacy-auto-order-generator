@@ -45,13 +45,7 @@ class SalesImportController extends Controller
         try {
             $file = $request->file('file');
             $extension = strtolower($file->getClientOriginalExtension());
-
-            $storedPath = $file->storeAs(
-                'imports',
-                'sales_import_' . time() . '.' . $extension,
-                'local'
-            );
-
+            $storedPath = $file->storeAs('imports', 'sales_import_' . time() . '.' . $extension, 'local');
             $fullPath = Storage::disk('local')->path($storedPath);
 
             $batch = ImportBatch::create([
@@ -72,7 +66,6 @@ class SalesImportController extends Controller
             Storage::disk('local')->delete($storedPath);
             $storedPath = null;
 
-            // Attempt resolution
             $resolution = $this->resolver->resolveBatch($batch);
 
             $batch->update([
@@ -83,68 +76,22 @@ class SalesImportController extends Controller
                 ],
             ]);
 
-            // Everything resolved → commit now
-            if (empty($resolution['missing_medicines'])
-                && empty($resolution['missing_suppliers'])
-                && empty($resolution['missing_companies'])
-                && empty($resolution['unlinked_medicines']) 
-            ) {
-                $commitStats = $this->commitBatch($batch);
-
-                return response()->json([
-                    'status'  => 'completed',
-                    'batch'   => $batch->batch_uuid,
-                    'stats'   => $commitStats,
-                    'message' => 'All rows imported successfully.',
-                ]);
-            }
-
-            // Pause
-            $batch->update([
-                'status'           => 'paused',
-                'missing_entities' => $resolution,
-            ]);
-
-            return response()->json([
-                'status'             => 'paused',
-                'batch'              => $batch->batch_uuid,
-                'missing_medicines'  => $resolution['missing_medicines'],
-                'missing_suppliers'  => $resolution['missing_suppliers'],
-                'missing_companies'  => $resolution['missing_companies'],
-                'unlinked_medicines' => $resolution['unlinked_medicines'],   // NEW
-                'affected_rows'      => $resolution['affected_rows'],
-                'stats'              => $batch->stats,
-                'message'            => 'Some mappings could not be resolved. Please resolve them to continue.',
-            ]);
+            return $this->buildPauseOrCommitResponse($batch, $resolution);
         } catch (\Maatwebsite\Excel\Validators\ValidationException $e) {
-            if ($storedPath) {
-                Storage::disk('local')->delete($storedPath);
-            }
-
+            if ($storedPath) Storage::disk('local')->delete($storedPath);
             $errors = [];
             foreach ($e->failures() as $failure) {
                 $errors[] = "Row {$failure->row()}: " . implode(', ', $failure->errors());
             }
-
             return response()->json([
                 'status' => 'failed',
                 'errors' => array_slice($errors, 0, 50),
                 'total'  => count($errors),
             ], 422);
-
         } catch (\Exception $e) {
-            if ($storedPath) {
-                Storage::disk('local')->delete($storedPath);
-            }
-
-            Log::error('Sales import failed: ' . $e->getMessage(), [
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            return response()->json([
-                'status'  => 'failed',
-                'message' => $e->getMessage(),
-            ], 500);
+            if ($storedPath) Storage::disk('local')->delete($storedPath);
+            Log::error('Sales import failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json(['status' => 'failed', 'message' => $e->getMessage()], 500);
         }
     }
 
@@ -257,12 +204,13 @@ class SalesImportController extends Controller
     public function storeSupplier(Request $request)
     {
         $data = $request->validate([
-            'name'       => 'required|string|max:255',
-            'code'       => 'nullable|string|max:100|unique:suppliers,code',
-            'company_id' => 'nullable|integer|exists:companies,id',
+            'name' => 'required|string|max:255',
         ]);
 
-        $supplier = Supplier::create($data);
+        $supplier = Supplier::create([
+            'name'      => $data['name'],
+            'is_active' => true,
+        ]);
 
         return response()->json($supplier, 201);
     }
@@ -270,15 +218,12 @@ class SalesImportController extends Controller
     public function storeCompany(Request $request)
     {
         $data = $request->validate([
-            'name'        => 'required|string|max:255',
-            'supplier_id' => 'nullable|integer|exists:suppliers,id',
-            'is_active'   => 'nullable|boolean',
+            'name' => 'required|string|max:255',
         ]);
 
         $company = Company::create([
-            'name'        => $data['name'],
-            'supplier_id' => $data['supplier_id'] ?? null,
-            'is_active'   => $data['is_active'] ?? true,
+            'name'      => $data['name'],
+            'is_active' => true,
         ]);
 
         return response()->json($company, 201);
@@ -350,78 +295,106 @@ class SalesImportController extends Controller
 
     // In SalesImportController
 
-/**
- * Load all suppliers + companies for the resolve dropdowns.
- */
-public function resolveOptions()
-{
-    return response()->json([
-        'suppliers' => Supplier::orderBy('name')->get(['id', 'name']),
-        'companies' => Company::with('supplier:id,name')
-            ->orderBy('name')
-            ->get(['id', 'name', 'supplier_id']),
-    ]);
-}
-
-/**
- * Resume with the enriched resolution payload.
- */
-public function resume(Request $request, string $batchUuid)
-{
-    $request->headers->set('Accept', 'application/json');
-
-    $batch = ImportBatch::where('batch_uuid', $batchUuid)->firstOrFail();
-
-    if ($batch->status === 'committed') {
+    /**
+     * Load all suppliers + companies for the resolve dropdowns.
+     */
+    public function resolveOptions()
+    {
         return response()->json([
-            'status'  => 'completed',
-            'stats'   => $batch->stats,
-            'message' => 'This batch was already committed.',
+            'suppliers' => Supplier::orderBy('name')->get(['id', 'name']),
+            'companies' => Company::orderBy('name')->get(['id', 'name']),
         ]);
     }
 
+    /**
+     * Resume with the enriched resolution payload.
+     */
+    public function resume(Request $request, string $batchUuid)
+    {
+        $request->headers->set('Accept', 'application/json');
+
+        $batch = ImportBatch::where('batch_uuid', $batchUuid)->firstOrFail();
+
+        if ($batch->status === 'committed') {
+            return response()->json([
+                'status'  => 'completed',
+                'stats'   => $batch->stats,
+                'message' => 'This batch was already committed.',
+            ]);
+        }
+
         $resolutions = $request->validate([
-            'medicine_suppliers'         => 'array',
-            'medicine_suppliers.*'       => 'nullable|integer|exists:suppliers,id',
-
-            'supplier_company_links'     => 'array',
-            'supplier_company_links.*'   => 'nullable|integer|exists:companies,id',
-
-            'new_companies'               => 'array',
-            'new_companies.*.name'        => 'required_with:new_companies|string|max:255',
-            'new_companies.*.supplier_id' => 'nullable|integer|exists:suppliers,id',
+            'medicine_suppliers'   => 'array',
+            'medicine_suppliers.*' => 'nullable|integer|exists:suppliers,id',
         ]);
 
-    $resolution = $this->resolver->applyResolutions($batch, $resolutions);
+        $resolution = $this->resolver->applyResolutions($batch, $resolutions);
+        $batch->update(['missing_entities' => $resolution]);
 
-    $batch->update(['missing_entities' => $resolution]);
+        return $this->buildPauseOrCommitResponse($batch, $resolution);
+    }
 
-    if (!empty($resolution['missing_medicines'])
-    || !empty($resolution['missing_suppliers'])
-    || !empty($resolution['missing_companies'])
-    || !empty($resolution['unlinked_medicines'])
-    || !empty($resolution['suppliers_without_company'])
-) {
-    return response()->json([
-        'status'                    => 'paused',
-        'batch'                     => $batch->batch_uuid,
-        'missing_medicines'         => $resolution['missing_medicines'],
-        'unlinked_medicines'        => $resolution['unlinked_medicines'],
-        'missing_suppliers'         => $resolution['missing_suppliers'],
-        'suppliers_without_company' => $resolution['suppliers_without_company'],
-        'missing_companies'         => $resolution['missing_companies'],
-        'affected_rows'             => $resolution['affected_rows'],
-        'message'                   => 'Some mappings are still unresolved.',
-    ]);
-}
+    public function resolveMedicine(Request $request, string $batchUuid)
+    {
+        $request->headers->set('Accept', 'application/json');
 
-    $commitStats = $this->commitBatch($batch);
+        $data = $request->validate([
+            'product_code' => 'required|string',
+            'action'       => 'required|in:create,skip',
+            'company_id'   => 'nullable|integer|exists:companies,id',
+            'supplier_id'  => 'nullable|integer|exists:suppliers,id',
+        ]);
 
-    return response()->json([
-        'status'  => 'completed',
-        'batch'   => $batch->batch_uuid,
-        'stats'   => $commitStats,
-        'message' => 'Import completed successfully.',
-    ]);
-}
+        $batch = ImportBatch::where('batch_uuid', $batchUuid)->firstOrFail();
+
+        try {
+            $resolution = $this->resolver->resolveMedicine(
+                $batch,
+                $data['product_code'],
+                $data['action'],
+                $data['company_id'] ?? null,
+                $data['supplier_id'] ?? null
+            );
+
+            $batch->update(['missing_entities' => $resolution]);
+
+            return $this->buildPauseOrCommitResponse($batch, $resolution);
+        } catch (\Throwable $e) {
+            Log::error('resolveMedicine failed', ['message' => $e->getMessage()]);
+            return response()->json(['status' => 'failed', 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    protected function buildPauseOrCommitResponse(ImportBatch $batch, array $resolution)
+    {
+        $hasUnresolved =
+            !empty($resolution['missing_medicines'])
+            || !empty($resolution['unlinked_medicines'])
+            || !empty($resolution['supplier_link_missing'])
+            || !empty($resolution['suppliers_without_company']);
+
+        if (!$hasUnresolved) {
+            $commitStats = $this->commitBatch($batch);
+            return response()->json([
+                'status'  => 'completed',
+                'batch'   => $batch->batch_uuid,
+                'stats'   => $commitStats,
+                'message' => 'Import completed successfully.',
+            ]);
+        }
+
+        $batch->update(['status' => 'paused']);
+
+        return response()->json([
+            'status'                    => 'paused',
+            'batch'                     => $batch->batch_uuid,
+            'missing_medicines'         => $resolution['missing_medicines'] ?? [],
+            'unlinked_medicines'        => $resolution['unlinked_medicines'] ?? [],
+            'total_missing_medicines'   => $resolution['total_missing_medicines'] ?? 0,
+            'total_unlinked_medicines'  => $resolution['total_unlinked_medicines'] ?? 0,
+            'affected_rows'             => $resolution['affected_rows'] ?? [],
+            'stats'                     => $batch->stats,
+            'message'                   => 'Please resolve the next item to continue.',
+        ]);
+    }
 }

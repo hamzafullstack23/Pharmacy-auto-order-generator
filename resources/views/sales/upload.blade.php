@@ -8,16 +8,16 @@
         <div class="bg-white overflow-hidden shadow-xl sm:rounded-lg p-6 lg:p-8">
             <h1 class="text-2xl font-bold mb-6">Import Daily Sales</h1>
 
-            {{-- PHASE 1: UPLOAD --}}
+            {{-- ============ PHASE 1: UPLOAD ============ --}}
             <template x-if="phase === 'upload'">
                 <div class="space-y-6">
                     <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
                         <h3 class="text-blue-700 font-semibold mb-2">Required CSV/Excel Columns:</h3>
                         <ul class="list-disc list-inside text-sm text-blue-600">
-                            <li><strong>Product Code</strong> — Must match product code in system</li>
-                            <li><strong>Product Name</strong> — Product name from export</li>
-                            <li><strong>Quantity</strong> — Quantity sold</li>
-                            <li><strong>Date</strong> (optional) — Sale date (defaults to selected date)</li>
+                            <li><strong>Product Code</strong></li>
+                            <li><strong>Product Name</strong></li>
+                            <li><strong>Quantity</strong></li>
+                            <li><strong>Date</strong> (optional)</li>
                         </ul>
                     </div>
 
@@ -61,7 +61,7 @@
                 </div>
             </template>
 
-            {{-- PHASE 2: PAUSE & RESOLVE --}}
+            {{-- ============ PHASE 2: PAUSE & RESOLVE ============ --}}
             <template x-if="phase === 'paused'">
                 <div class="space-y-8">
                     <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-4">
@@ -71,76 +71,131 @@
                         <p class="text-sm text-yellow-700 mt-1" x-text="pauseMessage"></p>
                     </div>
 
-                    {{-- Unlinked Medicines --}}
-                    <template x-if="unlinkedMedicines.length">
-                        <div>
-                            <h3 class="font-semibold mb-2 text-lg text-blue-700">Assign Supplier to Medicine</h3>
-                            <p class="text-sm text-gray-600 mb-3">
-                                These medicines have no supplier linked. Pick one.
+                    {{-- ===== SINGLE MISSING MEDICINE FORM ===== --}}
+                    <template x-if="missingMedicines.length">
+                        <div class="bg-white border-2 border-red-300 rounded-lg p-6 space-y-4">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-lg font-semibold text-red-700">Missing Medicine</h3>
+                                <span class="text-xs text-gray-500"
+                                      x-text="'Item ' + (totalMissingMedicines - missingMedicines.length + 1) + ' of ' + totalMissingMedicines"></span>
+                            </div>
+
+                            <div class="bg-red-50 border border-red-200 rounded p-3">
+                                <div class="grid grid-cols-2 gap-2 text-sm">
+                                    <div><span class="font-medium">Product Code:</span>
+                                        <span class="font-mono ml-2" x-text="missingMedicines[0].product_code"></span></div>
+                                    <div><span class="font-medium">Product Name:</span>
+                                        <span class="ml-2" x-text="missingMedicines[0].product_name"></span></div>
+                                    <div><span class="font-medium">Affected Rows:</span>
+                                        <span class="ml-2" x-text="missingMedicines[0].occurrences"></span></div>
+                                </div>
+                            </div>
+
+                            <p class="text-sm text-gray-600">
+                                This product code doesn't exist in the system. Create it now with the correct company and supplier, or skip these rows.
                             </p>
-                            <template x-for="m in unlinkedMedicines" :key="m.medicine_id">
-                                <div class="flex flex-wrap items-center gap-3 mb-2 bg-blue-50 p-3 rounded">
-                                    <span class="text-sm font-mono" x-text="'Med #' + m.medicine_id"></span>
-                                    <span class="text-sm font-medium" x-text="m.medicine_name || m.product_code"></span>
-                                    <span class="text-xs text-gray-500" x-text="'(' + m.occurrences + ' rows)'"></span>
-                                    <select x-model="resolutions.medicine_suppliers[m.medicine_id]"
-                                            class="border rounded p-1 text-sm min-w-[240px]">
-                                        <option value="">-- Choose supplier --</option>
-                                        <template x-for="s in allSuppliers" :key="s.id">
-                                            <option :value="s.id" x-text="s.name"></option>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {{-- Company --}}
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Company *</label>
+                                    <select x-model="newMedicine.company_id"
+                                            class="w-full border rounded p-2 text-sm">
+                                        <option value="">-- Select company --</option>
+                                        <template x-for="c in allCompanies" :key="c.id">
+                                            <option :value="c.id" x-text="c.name"></option>
                                         </template>
                                     </select>
-                                </div>
-                            </template>
-                        </div>
-                    </template>
-
-                    {{-- Suppliers Without Company --}}
-                    <template x-if="suppliersWithoutCompany.length">
-                        <div>
-                            <h3 class="font-semibold mb-2 text-lg text-orange-700">Suppliers Without a Company</h3>
-                            <p class="text-sm text-gray-600 mb-3">
-                                Pick an existing company to reassign, or create a new one.
-                            </p>
-                            <template x-for="s in suppliersWithoutCompany" :key="s.supplier_id">
-                                <div class="bg-orange-50 p-3 rounded mb-2">
-                                    <div class="flex flex-wrap items-center gap-3">
-                                        <span class="text-sm font-mono" x-text="'Supplier #' + s.supplier_id"></span>
-                                        <span class="text-sm font-medium" x-text="s.supplier_name"></span>
-                                        <span class="text-xs text-gray-500" x-text="'(' + s.occurrences + ' rows)'"></span>
-                                    </div>
-                                    <div class="flex flex-wrap items-center gap-3 mt-2">
-                                        <select x-model="resolutions.supplier_company_links[s.supplier_id]"
-                                                class="border rounded p-1 text-sm min-w-[240px]">
-                                            <option value="">-- Reassign existing company --</option>
-                                            <template x-for="c in allCompanies" :key="c.id">
-                                                <option :value="c.id" x-text="c.name"></option>
-                                            </template>
-                                        </select>
-                                        <span class="text-xs text-gray-500">or</span>
-                                        <input type="text" placeholder="New company name"
-                                               x-model="newCompanies[s.supplier_id].name"
-                                               class="border rounded p-1 text-sm">
-                                        <button @click="createCompanyForSupplier(s.supplier_id)"
-                                                class="text-indigo-600 hover:text-indigo-800 text-sm font-medium">
+                                    <div class="mt-2 flex items-center gap-2">
+                                        <input type="text" placeholder="Or type new company name"
+                                               x-model="newCompany.name"
+                                               class="flex-1 border rounded p-1 text-sm">
+                                        <button type="button" @click="createNewCompany"
+                                                class="text-indigo-600 hover:text-indigo-800 text-sm font-medium whitespace-nowrap">
                                             + Create
                                         </button>
                                     </div>
                                 </div>
-                            </template>
+
+                                {{-- Supplier --}}
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+                                    <select x-model="newMedicine.supplier_id"
+                                            class="w-full border rounded p-2 text-sm">
+                                        <option value="">-- Select supplier --</option>
+                                        <template x-for="s in allSuppliers" :key="s.id">
+                                            <option :value="s.id" x-text="s.name"></option>
+                                        </template>
+                                    </select>
+                                    <div class="mt-2 flex items-center gap-2">
+                                        <input type="text" placeholder="Or type new supplier name"
+                                               x-model="newSupplier.name"
+                                               class="flex-1 border rounded p-1 text-sm">
+                                        <button type="button" @click="createNewSupplier"
+                                                class="text-indigo-600 hover:text-indigo-800 text-sm font-medium whitespace-nowrap">
+                                            + Create
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex items-center space-x-3 pt-2 border-t">
+                                <button type="button" @click="resolveMedicineAction('create')"
+                                        class="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                        :disabled="loading || !newMedicine.company_id">
+                                    <i class="fas fa-plus mr-2"></i> Create & Continue
+                                </button>
+                                <button type="button" @click="resolveMedicineAction('skip')"
+                                        class="inline-flex items-center px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 disabled:opacity-50"
+                                        :disabled="loading">
+                                    <i class="fas fa-forward mr-2"></i> Skip These Rows
+                                </button>
+                            </div>
                         </div>
                     </template>
 
-                    {{-- Missing Suppliers --}}
-                    <template x-if="missingSuppliers.length">
-                        <div>
-                            <h3 class="font-semibold mb-2 text-lg text-red-700">Missing Suppliers</h3>
-                            <template x-for="s in missingSuppliers" :key="s.supplier_id">
-                                <div class="flex flex-wrap items-center gap-3 mb-2 bg-red-50 p-3 rounded">
-                                    <span class="text-sm font-mono" x-text="'Supplier #' + s.supplier_id"></span>
-                                    <span class="text-xs text-gray-500" x-text="'(' + s.occurrences + ' rows)'"></span>
+                    {{-- ===== SINGLE UNLINKED MEDICINE FORM ===== --}}
+                    <template x-if="!missingMedicines.length && unlinkedMedicines.length">
+                        <div class="bg-white border-2 border-blue-300 rounded-lg p-6 space-y-4">
+                            <div class="flex items-center justify-between">
+                                <h3 class="text-lg font-semibold text-blue-700">Assign Supplier to Medicine</h3>
+                                <span class="text-xs text-gray-500"
+                                      x-text="'Item ' + (totalUnlinkedMedicines - unlinkedMedicines.length + 1) + ' of ' + totalUnlinkedMedicines"></span>
+                            </div>
+
+                            <div class="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
+                                <div><span class="font-medium">Medicine:</span>
+                                    <span class="ml-2" x-text="unlinkedMedicines[0].medicine_name"></span>
+                                    <span class="text-gray-500 ml-2" x-text="'(Med #' + unlinkedMedicines[0].medicine_id + ')'"></span>
                                 </div>
-                            </template>
+                                <div><span class="font-medium">Product Code:</span>
+                                    <span class="font-mono ml-2" x-text="unlinkedMedicines[0].product_code"></span></div>
+                                <div><span class="font-medium">Affected Rows:</span>
+                                    <span class="ml-2" x-text="unlinkedMedicines[0].occurrences"></span></div>
+                            </div>
+
+                            <p class="text-sm text-gray-600">
+                                This medicine has no supplier linked. Pick one to link it.
+                            </p>
+
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+                                <select x-model="unlinkedSupplierId"
+                                        class="w-full md:w-1/2 border rounded p-2 text-sm">
+                                    <option value="">-- Select supplier --</option>
+                                    <template x-for="s in allSuppliers" :key="s.id">
+                                        <option :value="s.id" x-text="s.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+                            <div class="flex items-center space-x-3 pt-2 border-t">
+                                <button type="button" @click="resolveUnlinkedMedicine"
+                                        class="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
+                                        :disabled="loading || !unlinkedSupplierId">
+                                    <i class="fas fa-link mr-2"></i> Link & Continue
+                                </button>
+                            </div>
                         </div>
                     </template>
 
@@ -180,21 +235,15 @@
                     </template>
 
                     <div class="flex items-center space-x-4 pt-4 border-t">
-                        <button @click="resume"
-                                class="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
-                                :disabled="loading">
-                            <i class="fas fa-play mr-2"></i>
-                            <span x-text="loading ? 'Resuming…' : 'Resume Import'"></span>
-                        </button>
                         <button @click="reset"
                                 class="inline-flex items-center px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
-                            <i class="fas fa-times mr-2"></i> Cancel
+                            <i class="fas fa-times mr-2"></i> Cancel Import
                         </button>
                     </div>
                 </div>
             </template>
 
-            {{-- PHASE 3: COMPLETED --}}
+            {{-- ============ PHASE 3: COMPLETED ============ --}}
             <template x-if="phase === 'completed'">
                 <div class="space-y-4">
                     <div class="bg-green-50 border border-green-300 rounded-lg p-6">
@@ -227,21 +276,25 @@ function salesImport() {
         batch: null,
         pauseMessage: '',
         missingMedicines: [],
-        missingSuppliers: [],
-        missingCompanies: [],
         unlinkedMedicines: [],
-        suppliersWithoutCompany: [],
+        totalMissingMedicines: 0,
+        totalUnlinkedMedicines: 0,
         affectedRows: [],
         stats: {},
         errors: [],
+
         allSuppliers: [],
         allCompanies: [],
-        newCompanies: {},
-        resolutions: {
-            medicine_suppliers: {},
-            supplier_company_links: {},
-        },
 
+        // Missing medicine form state
+        newMedicine: { company_id: '', supplier_id: '' },
+        newCompany:  { name: '' },
+        newSupplier: { name: '' },
+
+        // Unlinked medicine form state
+        unlinkedSupplierId: '',
+
+        // ---------- Upload ----------
         async submitUpload() {
             this.errors = [];
             const fileInput = this.$refs.file;
@@ -249,6 +302,7 @@ function salesImport() {
                 alert('Please select a file.');
                 return;
             }
+
             this.loading = true;
             const fd = new FormData();
             fd.append('file', fileInput.files[0]);
@@ -267,31 +321,25 @@ function salesImport() {
             }
         },
 
+        // ---------- Handle server response ----------
         async handleResponse(data) {
             if (data.status === 'paused') {
                 this.phase = 'paused';
                 this.batch = data.batch;
                 this.pauseMessage = data.message;
-                this.missingMedicines        = data.missing_medicines || [];
-                this.missingSuppliers        = data.missing_suppliers || [];
-                this.missingCompanies        = data.missing_companies || [];
-                this.unlinkedMedicines       = data.unlinked_medicines || [];
-                this.suppliersWithoutCompany = data.suppliers_without_company || [];
-                this.affectedRows            = data.affected_rows || [];
+                this.missingMedicines       = data.missing_medicines || [];
+                this.unlinkedMedicines      = data.unlinked_medicines || [];
+                this.totalMissingMedicines  = data.total_missing_medicines || 0;
+                this.totalUnlinkedMedicines = data.total_unlinked_medicines || 0;
+                this.affectedRows           = data.affected_rows || [];
 
-                this.suppliersWithoutCompany.forEach(s => {
-                    if (!this.newCompanies[s.supplier_id]) {
-                        this.newCompanies[s.supplier_id] = { name: '' };
-                    }
-                });
+                // Reset per-item form state
+                this.newMedicine = { company_id: '', supplier_id: '' };
+                this.newCompany  = { name: '' };
+                this.newSupplier = { name: '' };
+                this.unlinkedSupplierId = '';
 
-                try {
-                    const opts = await window.apiFetch('{{ route('sales.import.options') }}');
-                    this.allSuppliers = opts.suppliers || [];
-                    this.allCompanies = opts.companies || [];
-                } catch (e) {
-                    console.error('Failed to load options', e);
-                }
+                await this.loadOptions();
             } else if (data.status === 'completed') {
                 this.phase = 'completed';
                 this.stats = data.stats || {};
@@ -300,20 +348,104 @@ function salesImport() {
             }
         },
 
-        async resume() {
+        // ---------- Load supplier + company options ----------
+        async loadOptions() {
+            try {
+                const opts = await window.apiFetch('{{ route('sales.import.options') }}');
+                this.allSuppliers = opts.suppliers || [];
+                this.allCompanies = opts.companies || [];
+            } catch (e) {
+                console.error('Failed to load options', e);
+            }
+        },
+
+        // ---------- Create new company inline ----------
+        async createNewCompany() {
+            if (!this.newCompany.name) {
+                alert('Enter a company name first.');
+                return;
+            }
+            try {
+                const company = await window.apiFetch('{{ route('sales.import.companies.store') }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.newCompany.name }),
+                });
+                this.allCompanies.push(company);
+                this.newMedicine.company_id = company.id;
+                this.newCompany.name = '';
+            } catch (e) {
+                alert('Failed to create company: ' + e.message);
+            }
+        },
+
+        // ---------- Create new supplier inline ----------
+        async createNewSupplier() {
+            if (!this.newSupplier.name) {
+                alert('Enter a supplier name first.');
+                return;
+            }
+            try {
+                const supplier = await window.apiFetch('{{ route('sales.import.suppliers.store') }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: this.newSupplier.name }),
+                });
+                this.allSuppliers.push(supplier);
+                this.newMedicine.supplier_id = supplier.id;
+                this.newSupplier.name = '';
+            } catch (e) {
+                alert('Failed to create supplier: ' + e.message);
+            }
+        },
+
+        // ---------- Resolve ONE missing medicine: create or skip ----------
+        async resolveMedicineAction(action) {
+            if (!this.missingMedicines.length) return;
+
+            const productCode = this.missingMedicines[0].product_code;
+
+            if (action === 'create' && !this.newMedicine.company_id) {
+                alert('Please select a company first.');
+                return;
+            }
+
             this.loading = true;
             try {
-                const payload = {
-                    medicine_suppliers: this.resolutions.medicine_suppliers,
-                    supplier_company_links: this.resolutions.supplier_company_links,
-                    new_companies: Object.entries(this.newCompanies)
-                        .filter(([_, v]) => v && v.name)
-                        .map(([supplierId, v]) => ({
-                            name: v.name,
-                            supplier_id: parseInt(supplierId),
-                        })),
-                };
+                const url = '{{ url('/sales/import') }}/' + this.batch + '/resolve-medicine';
+                const data = await window.apiFetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        product_code: productCode,
+                        action: action,
+                        company_id:  this.newMedicine.company_id || null,
+                        supplier_id: this.newMedicine.supplier_id || null,
+                    }),
+                });
+                await this.handleResponse(data);
+            } catch (e) {
+                this.errors = [e.message];
+            } finally {
+                this.loading = false;
+            }
+        },
 
+        // ---------- Resolve ONE unlinked medicine: link supplier ----------
+        async resolveUnlinkedMedicine() {
+            if (!this.unlinkedMedicines.length || !this.unlinkedSupplierId) {
+                return;
+            }
+
+            const medicineId = this.unlinkedMedicines[0].medicine_id;
+            const payload = {
+                medicine_suppliers: {
+                    [medicineId]: this.unlinkedSupplierId,
+                },
+            };
+
+            this.loading = true;
+            try {
                 const url = '{{ url('/sales/import') }}/' + this.batch + '/resume';
                 const data = await window.apiFetch(url, {
                     method: 'POST',
@@ -328,34 +460,25 @@ function salesImport() {
             }
         },
 
-        async createCompanyForSupplier(supplierId) {
-            const name = this.newCompanies[supplierId]?.name;
-            if (!name) {
-                alert('Enter a company name first.');
-                return;
-            }
-            try {
-                const company = await window.apiFetch('{{ route('sales.import.companies.store') }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, supplier_id: supplierId, is_active: true }),
-                });
-                this.allCompanies.push(company);
-                this.newCompanies[supplierId] = { name: '' };
-                alert('Company created: ' + company.name);
-            } catch (e) {
-                alert('Error: ' + e.message);
-            }
-        },
-
+        // ---------- Reset to fresh upload state ----------
         reset() {
             Object.assign(this, {
-                phase: 'upload', batch: null, pauseMessage: '',
-                missingMedicines: [], missingSuppliers: [], missingCompanies: [],
-                unlinkedMedicines: [], suppliersWithoutCompany: [],
-                affectedRows: [], stats: {}, errors: [],
-                allSuppliers: [], allCompanies: [], newCompanies: {},
-                resolutions: { medicine_suppliers: {}, supplier_company_links: {} },
+                phase: 'upload',
+                batch: null,
+                pauseMessage: '',
+                missingMedicines: [],
+                unlinkedMedicines: [],
+                totalMissingMedicines: 0,
+                totalUnlinkedMedicines: 0,
+                affectedRows: [],
+                stats: {},
+                errors: [],
+                allSuppliers: [],
+                allCompanies: [],
+                newMedicine: { company_id: '', supplier_id: '' },
+                newCompany:  { name: '' },
+                newSupplier: { name: '' },
+                unlinkedSupplierId: '',
             });
             if (this.$refs.file) this.$refs.file.value = '';
         },

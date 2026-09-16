@@ -13,24 +13,19 @@ class ResolveImportMappings
 {
     /**
      * Authoritative chain:
-     *   product_code → medicines.id
-     *                → medicine_supplier.supplier_id
-     *                → companies.supplier_id → companies.id
+     *   CSV.product_code → medicines → (id, company_id)
+     *   medicines.id → medicine_supplier.supplier_id
      */
     public function resolveBatch(ImportBatch $batch): array
     {
         $missingMedicines  = [];
-        $missingSuppliers  = [];
-        $missingCompanies  = [];
         $unlinkedMedicines = [];
-        $suppliersWithoutCompany = [];
-        $affectedRows = [];
+        $affectedRows      = [];
 
         $batch->pendingRows()
             ->orderBy('id')
             ->chunkById(500, function ($rows) use (
-                &$missingMedicines, &$missingSuppliers, &$missingCompanies,
-                &$unlinkedMedicines, &$suppliersWithoutCompany, &$affectedRows
+                &$missingMedicines, &$unlinkedMedicines, &$affectedRows
             ) {
                 foreach ($rows as $row) {
                     $result = $this->resolveRow($row);
@@ -53,9 +48,6 @@ class ResolveImportMappings
                         'quantity'     => (float) $row->quantity,
                         'sale_date'    => optional($row->sale_date)->format('Y-m-d'),
                         'reason'       => $result['reason'],
-                        'medicine_id'  => $result['medicine_id'] ?? null,
-                        'supplier_id'  => $result['supplier_id'] ?? null,
-                        'company_id'   => $result['company_id'] ?? null,
                     ];
 
                     if (!empty($result['missing_medicine'])) {
@@ -75,60 +67,31 @@ class ResolveImportMappings
                             'occurrences'   => ($unlinkedMedicines[$mid]['occurrences'] ?? 0) + 1,
                         ];
                     }
-
-                    if (!empty($result['missing_supplier_id'])) {
-                        $sid = $result['missing_supplier_id'];
-                        $missingSuppliers[$sid] = [
-                            'supplier_id' => $sid,
-                            'occurrences' => ($missingSuppliers[$sid]['occurrences'] ?? 0) + 1,
-                        ];
-                    }
-
-                    if (!empty($result['supplier_without_company_id'])) {
-                        $sid = $result['supplier_without_company_id'];
-                        $suppliersWithoutCompany[$sid] = [
-                            'supplier_id'   => $sid,
-                            'supplier_name' => $result['supplier_without_company_name'] ?? null,
-                            'occurrences'   => ($suppliersWithoutCompany[$sid]['occurrences'] ?? 0) + 1,
-                        ];
-                    }
-
-                    if (!empty($result['missing_company_id'])) {
-                        $cid = $result['missing_company_id'];
-                        $missingCompanies[$cid] = [
-                            'company_id'  => $cid,
-                            'occurrences' => ($missingCompanies[$cid]['occurrences'] ?? 0) + 1,
-                        ];
-                    }
                 }
             });
 
+        // INTERPRETATION A: return only the first of each kind
         return [
-            'missing_medicines'         => array_values($missingMedicines),
-            'unlinked_medicines'        => array_values($unlinkedMedicines),
-            'missing_suppliers'         => array_values($missingSuppliers),
-            'suppliers_without_company' => array_values($suppliersWithoutCompany),
-            'missing_companies'         => array_values($missingCompanies),
-            'affected_rows'             => $affectedRows,
+            'missing_medicines'  => $missingMedicines  ? [array_values($missingMedicines)[0]]  : [],
+            'unlinked_medicines' => $unlinkedMedicines ? [array_values($unlinkedMedicines)[0]] : [],
+            'total_missing_medicines'  => count($missingMedicines),
+            'total_unlinked_medicines' => count($unlinkedMedicines),
+            'affected_rows'      => $affectedRows,
         ];
     }
 
     protected function resolveRow(ImportRow $row): array
     {
-        // Already resolved at row level? Trust it.
-        if ($row->medicine_id && $row->supplier_id && $row->company_id) {
+        if ($row->medicine_id && $row->supplier_id) {
             return [
-                'resolved'            => true,
-                'medicine_id'         => $row->medicine_id,
-                'supplier_id'         => $row->supplier_id,
-                'company_id'          => $row->company_id,
-                'missing_medicine'    => false,
-                'missing_supplier_id' => null,
-                'missing_company_id'  => null,
+                'resolved'    => true,
+                'medicine_id' => $row->medicine_id,
+                'supplier_id' => $row->supplier_id,
+                'company_id'  => $row->company_id,
             ];
         }
 
-        // Step 1: product_code → medicine
+        // Step 1: CSV.product_code → medicines
         $medicine = Medicine::where('product_code', $row->product_code)->first();
 
         if (!$medicine) {
@@ -143,15 +106,13 @@ class ResolveImportMappings
 
         if (!$medicine) {
             return [
-                'resolved'            => false,
-                'reason'              => 'medicine_not_found',
-                'missing_medicine'    => true,
-                'missing_supplier_id' => null,
-                'missing_company_id'  => null,
+                'resolved'         => false,
+                'reason'           => 'medicine_not_found',
+                'missing_medicine' => true,
             ];
         }
 
-        // Step 2: medicine → medicine_supplier.supplier_id
+        // Step 2: medicine → medicine_supplier
         $supplierId = DB::table('medicine_supplier')
             ->where('medicine_id', $medicine->id)
             ->orderByDesc('is_primary')
@@ -162,96 +123,100 @@ class ResolveImportMappings
             return [
                 'resolved'               => false,
                 'reason'                 => 'supplier_link_missing',
-                'missing_medicine'       => false,
-                'missing_supplier_id'    => null,
-                'missing_company_id'     => null,
                 'medicine_id'            => $medicine->id,
                 'unlinked_medicine_id'   => $medicine->id,
                 'unlinked_medicine_name' => $medicine->name,
             ];
         }
 
-        // Step 3: supplier exists?
-        $supplier = Supplier::find($supplierId);
-        if (!$supplier) {
-            return [
-                'resolved'            => false,
-                'reason'              => 'supplier_not_found',
-                'missing_medicine'    => false,
-                'missing_supplier_id' => $supplierId,
-                'missing_company_id'  => null,
-                'medicine_id'         => $medicine->id,
-            ];
-        }
-
-        // Step 4: supplier → companies.supplier_id → company.id
-        $company = Company::where('supplier_id', $supplierId)
-            ->orderBy('id')
-            ->first();
-
-        if (!$company) {
-            return [
-                'resolved'                     => false,
-                'reason'                       => 'supplier_has_no_company',
-                'missing_medicine'             => false,
-                'missing_supplier_id'          => null,
-                'missing_company_id'           => null,
-                'medicine_id'                  => $medicine->id,
-                'supplier_id'                  => $supplier->id,
-                'supplier_without_company_id'  => $supplier->id,
-                'supplier_without_company_name'=> $supplier->name,
-            ];
-        }
-
-        // Fully resolved
+        // Step 3: company_id read from medicine (authoritative)
         return [
-            'resolved'            => true,
-            'medicine_id'         => $medicine->id,
-            'supplier_id'         => $supplier->id,
-            'company_id'          => $company->id,
-            'missing_medicine'    => false,
-            'missing_supplier_id' => null,
-            'missing_company_id'  => null,
+            'resolved'    => true,
+            'medicine_id' => $medicine->id,
+            'supplier_id' => (int) $supplierId,
+            'company_id'  => $medicine->company_id,   // may be null
         ];
     }
 
     /**
-     * Apply user resolutions, then re-run the resolver.
-     *
-     * $resolutions:
-     *   medicine_suppliers     => [ medicine_id => supplier_id, ... ]   (link medicine → supplier via pivot)
-     *   supplier_company_links => [ supplier_id => company_id, ... ]    (reassign a company's supplier_id)
-     *   new_companies          => [ [ 'name' => ..., 'supplier_id' => ... ], ... ]
+     * Link a supplier to a medicine (used when supplier_link_missing).
      */
     public function applyResolutions(ImportBatch $batch, array $resolutions): array
     {
         DB::transaction(function () use ($resolutions) {
-            // 1. Link medicine → supplier via pivot
             foreach ($resolutions['medicine_suppliers'] ?? [] as $medicineId => $supplierId) {
                 if (empty($supplierId)) continue;
-
                 DB::table('medicine_supplier')->updateOrInsert(
                     ['medicine_id' => $medicineId, 'supplier_id' => $supplierId],
                     ['updated_at' => now(), 'created_at' => now()]
                 );
             }
+        });
 
-            // 2. Reassign an existing company to a supplier
-            foreach ($resolutions['supplier_company_links'] ?? [] as $supplierId => $companyId) {
-                if (empty($companyId)) continue;
-                Company::where('id', $companyId)->update(['supplier_id' => $supplierId]);
+        return $this->resolveBatch($batch);
+    }
+
+    /**
+     * Handle a single missing medicine: either CREATE it or SKIP it.
+     */
+    public function resolveMedicine(
+        ImportBatch $batch,
+        string $productCode,
+        string $action,
+        ?int $companyId = null,
+        ?int $supplierId = null
+    ): array {
+        DB::transaction(function () use ($batch, $productCode, $action, $companyId, $supplierId) {
+            if ($action === 'skip') {
+                // Mark all rows with this product code as skipped
+                ImportRow::where('import_batch_id', $batch->id)
+                    ->where('product_code', $productCode)
+                    ->where('status', 'pending')
+                    ->update([
+                        'status'        => 'skipped',
+                        'error_message' => 'Skipped by user (medicine not found)',
+                    ]);
+                return;
             }
 
-            // 3. Create brand new companies attached to a supplier
-            foreach ($resolutions['new_companies'] ?? [] as $payload) {
-                if (empty($payload['name'])) continue;
+            if ($action === 'create') {
+                if (!$companyId) {
+                    throw new \InvalidArgumentException('company_id is required to create a medicine.');
+                }
 
-                Company::create([
-                    'name'        => $payload['name'],
-                    'supplier_id' => $payload['supplier_id'] ?? null,
-                    'is_active'   => true,
+                // Find the sample row to get product_name
+                $sample = ImportRow::where('import_batch_id', $batch->id)
+                    ->where('product_code', $productCode)
+                    ->first();
+
+                if (!$sample) {
+                    throw new \RuntimeException("No import rows found for product code {$productCode}.");
+                }
+
+                // Create the medicine
+                $medicine = Medicine::create([
+                    'product_code' => $sample->product_code,
+                    'name'         => $sample->product_name,
+                    'company_id'   => $companyId,
+                    'pack_type'    => 'loose',
+                    'current_stock'=> 0,
+                    'is_active'    => true,
                 ]);
+
+                // Link the supplier via medicine_supplier
+                if ($supplierId) {
+                    DB::table('medicine_supplier')->insert([
+                        'medicine_id' => $medicine->id,
+                        'supplier_id' => $supplierId,
+                        'is_primary'  => 1,
+                        'created_at'  => now(),
+                        'updated_at'  => now(),
+                    ]);
+                }
+                return;
             }
+
+            throw new \InvalidArgumentException("Unknown action: {$action}");
         });
 
         return $this->resolveBatch($batch);

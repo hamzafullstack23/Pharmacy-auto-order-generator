@@ -7,7 +7,11 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     @stack('styles')
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
 
@@ -103,7 +107,52 @@
         @yield('content')
 
     </main>
+<script>
+    window.apiFetch = async function (url, options = {}) {
+        const token = document.querySelector('meta[name="csrf-token"]').content;
 
+        const headers = Object.assign({
+            'Accept': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest',
+            'X-CSRF-TOKEN': token,
+        }, options.headers || {});
+
+        const response = await fetch(url, {
+            ...options,
+            headers,
+            credentials: 'same-origin', // send session cookie
+        });
+
+        const text = await response.text();
+
+        // Detect HTML response (login redirect, error page, etc.)
+        if (text.trim().startsWith('<')) {
+            if (response.status === 419) {
+                throw new Error('Session expired (419). Please refresh the page.');
+            }
+            if (response.status === 401 || response.status === 403) {
+                throw new Error('Not authenticated. Please log in again.');
+            }
+            throw new Error(`Server returned HTML (status ${response.status}). Check logs.`);
+        }
+
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            throw new Error('Invalid JSON from server: ' + text.slice(0, 200));
+        }
+
+        if (!response.ok) {
+            const err = new Error(data.message || `HTTP ${response.status}`);
+            err.response = data;
+            err.status = response.status;
+            throw err;
+        }
+
+        return data;
+    };
+</script>
     @stack('scripts')
 
 </body>

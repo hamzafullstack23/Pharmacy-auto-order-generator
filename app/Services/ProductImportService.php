@@ -9,6 +9,7 @@ use App\Models\MedicineSupplier;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use App\Support\StringSanitizer;
 
 class ProductImportService
 {
@@ -661,7 +662,7 @@ class ProductImportService
                 
                 $data['medicines'][$medicineKey] = [
                     'product_code' => $row['product_code'] ?? null,
-                    'name' => trim($row['product_name']),
+                    'name' => trim(StringSanitizer::cleanName($row['product_name'] ?? null)),
                     'company_name' => trim($row['manufacturer']),
                     'supplier_name' => trim($row['supplier_name'] ?? ''),
                     'category_name' => $row['category_name'] ?? null,

@@ -18,6 +18,7 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\WithValidation;
 use Maatwebsite\Excel\Validators\Failure;
 use Throwable;
+use App\Support\StringSanitizer;
 
 class DailySalesImport implements
     ToCollection,
@@ -139,7 +140,7 @@ class DailySalesImport implements
                 'import_batch_id' => $this->batch->id,
                 'row_number'      => $this->rowCursor,
                 'product_code'    => $productCode,
-                'product_name'    => $productName,
+                'product_name'    => StringSanitizer::cleanName($productName ?? null),
                 'quantity'        => $quantity,
                 'sale_date'       => $saleDate,
                 'status'          => 'pending',

@@ -57,6 +57,16 @@
                             class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
                             Sales Import
                         </a>
+
+                        <a href="{{ route('sales.daily') }}"
+                            class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Daily Sales
+                        </a>
+
+                        <a href="{{ route('sales.daily.export-history') }}"
+                            class="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium">
+                            Exports
+                        </a>
                     </div>
                     @endauth
                 </div>

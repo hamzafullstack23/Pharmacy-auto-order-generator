@@ -9,6 +9,7 @@ use App\Http\Controllers\MedicineController;
 use App\Http\Controllers\SalesImportController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\ProductImportController;
+use App\Http\Controllers\DailySalesController;
 
 // Home redirects to login
 Route::get('/', function () {
@@ -35,6 +36,12 @@ Route::get('/sales/import/options',                         [SalesImportControll
 Route::post('/sales/import/companies',                      [SalesImportController::class, 'storeCompany'])->name('sales.import.companies.store');
 Route::post('/sales/import/suppliers',                      [SalesImportController::class, 'storeSupplier'])->name('sales.import.suppliers.store');
 Route::get('/sales/history',                                [SalesImportController::class, 'history'])->name('sales.history');
+
+//export sales
+Route::get('/sales/daily',              [DailySalesController::class, 'index'])->name('sales.daily');
+    Route::get('/sales/daily/export-form',  [DailySalesController::class, 'showExportForm'])->name('sales.daily.export-form');
+    Route::post('/sales/daily/export',      [DailySalesController::class, 'export'])->name('sales.daily.export');
+    Route::get('/sales/daily/exports',      [DailySalesController::class, 'history'])->name('sales.daily.export-history');
 
     // routes/web.php
 Route::get('/sales/import/options', [SalesImportController::class, 'resolveOptions'])

@@ -60,7 +60,11 @@ class DailySalesController extends Controller
         $unexportedQty = (clone $query)->where('is_exported', false)->sum('quantity');
 
         return view('sales.daily.index', compact(
-            'sales', 'suppliers', 'totalRows', 'totalQty', 'unexportedQty'
+            'sales',
+            'suppliers',
+            'totalRows',
+            'totalQty',
+            'unexportedQty'
         ));
     }
 
@@ -136,46 +140,46 @@ class DailySalesController extends Controller
     //     );
     // }
     public function export(Request $request)
-{
-    $request->validate([
-        'supplier_id' => 'required|integer|exists:suppliers,id',
-        'format'      => 'required|in:csv,xlsx',
-    ]);
+    {
+        $request->validate([
+            'supplier_id' => 'required|integer|exists:suppliers,id',
+            'format'      => 'required|in:csv,xlsx',
+        ]);
 
-    $supplier = Supplier::findOrFail($request->supplier_id);
-    $format   = $request->input('format', 'xlsx');
+        $supplier = Supplier::findOrFail($request->supplier_id);
+        $format   = $request->input('format', 'xlsx');
 
-    $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
+        $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
 
-    if ($rows->isEmpty()) {
-        return back()->with('warning', "No un-exported rows for '{$supplier->name}'.");
+        if ($rows->isEmpty()) {
+            return back()->with('warning', "No un-exported rows for '{$supplier->name}'.");
+        }
+
+        $extension = $format === 'xlsx' ? 'xlsx' : 'csv';
+        $filename  = 'daily-sales-' . Str::slug($supplier->name)
+            . '-' . now()->format('Y-m-d-His') . '.' . $extension;
+
+        $batch = ExportBatch::create([
+            'export_uuid'    => (string) Str::uuid(),
+            'supplier_id'    => $supplier->id,
+            'supplier_name'  => $supplier->name,
+            'rows_count'     => $rows->count(),
+            'total_quantity' => (float) $rows->sum('total_quantity'),
+            'filename'       => $filename,
+        ]);
+
+        $this->exportService->markExported($supplier->id, $batch);
+
+        $writerType = $format === 'xlsx'
+            ? \Maatwebsite\Excel\Excel::XLSX
+            : \Maatwebsite\Excel\Excel::CSV;
+
+        return \Maatwebsite\Excel\Facades\Excel::download(
+            new \App\Exports\SupplierDailySalesExport($supplier->name, $rows),
+            $filename,
+            $writerType
+        );
     }
-
-    $extension = $format === 'xlsx' ? 'xlsx' : 'csv';
-    $filename  = 'daily-sales-' . Str::slug($supplier->name)
-               . '-' . now()->format('Y-m-d-His') . '.' . $extension;
-
-    $batch = ExportBatch::create([
-        'export_uuid'    => (string) Str::uuid(),
-        'supplier_id'    => $supplier->id,
-        'supplier_name'  => $supplier->name,
-        'rows_count'     => $rows->count(),
-        'total_quantity' => (float) $rows->sum('total_quantity'),
-        'filename'       => $filename,
-    ]);
-
-    $this->exportService->markExported($supplier->id, $batch);
-
-    $writerType = $format === 'xlsx'
-        ? \Maatwebsite\Excel\Excel::XLSX
-        : \Maatwebsite\Excel\Excel::CSV;
-
-    return \Maatwebsite\Excel\Facades\Excel::download(
-        new \App\Exports\SupplierDailySalesExport($supplier->name, $rows),
-        $filename,
-        $writerType
-    );
-}
     /* ------------------------------------------------------------------
      |  Export history
      * ------------------------------------------------------------------ */
@@ -186,5 +190,105 @@ class DailySalesController extends Controller
             ->paginate(50);
 
         return view('sales.daily.export-history', compact('batches'));
+    }
+
+    /**
+     * Mark a single import row as "not received", returning it to the pending pool.
+     */
+    public function markNotReceived(Request $request, ImportRow $importRow)
+    {
+        $request->validate([
+            'reason' => 'nullable|string|max:255',
+        ]);
+
+        if (!$importRow->is_exported) {
+            return back()->with('warning', 'This row is not currently marked as exported.');
+        }
+
+        $importRow->update([
+            'is_exported'     => false,
+            'exported_at'     => null,
+            'export_batch_id' => null,
+            'return_reason'   => $request->input('reason', 'Not received from supplier'),
+            'returned_at'     => now(),
+        ]);
+
+        // If the export batch is now empty (all rows returned), delete the batch
+        if ($importRow->export_batch_id) {
+            $batchId = $importRow->getOriginal('export_batch_id');
+            $remaining = ImportRow::where('export_batch_id', $batchId)->count();
+            if ($remaining === 0) {
+                ExportBatch::where('id', $batchId)->delete();
+            }
+        }
+
+        return back()->with(
+            'success',
+            "Product '{$importRow->product_name}' returned to pending and will appear in the next export."
+        );
+    }
+
+    /**
+     * Mark multiple rows from an export batch as not received in one action.
+     * Called from the export history detail view.
+     */
+    public function markBatchItemsNotReceived(Request $request, string $batchUuid)
+    {
+        $request->validate([
+            'row_ids'   => 'required|array|min:1',
+            'row_ids.*' => 'integer|exists:import_rows,id',
+            'reason'    => 'nullable|string|max:255',
+        ]);
+
+        $batch = ExportBatch::where('export_uuid', $batchUuid)->firstOrFail();
+
+        $updated = ImportRow::where('export_batch_id', $batch->id)
+            ->whereIn('id', $request->row_ids)
+            ->update([
+                'is_exported'     => false,
+                'exported_at'     => null,
+                'export_batch_id' => null,
+                'return_reason'   => $request->input('reason', 'Not received from supplier'),
+                'returned_at'     => now(),
+            ]);
+
+        // Recalculate batch stats
+        $batch->update([
+            'rows_count'     => ImportRow::where('export_batch_id', $batch->id)->count(),
+            'total_quantity' => ImportRow::where('export_batch_id', $batch->id)->sum('quantity'),
+        ]);
+
+        // Delete empty batch
+        if ($batch->fresh()->rows_count === 0) {
+            $batch->delete();
+        }
+
+        return back()->with(
+            'success',
+            "{$updated} product(s) returned to pending for the next export."
+        );
+    }
+
+    public function showExportDetail(string $batchUuid)
+    {
+        $batch = ExportBatch::where('export_uuid', $batchUuid)->firstOrFail();
+
+        // All rows ever attached to this batch (including returned ones)
+        $rows = ImportRow::where(function ($q) use ($batch) {
+            $q->where('export_batch_id', $batch->id)
+                ->orWhere(function ($q2) use ($batch) {
+                    // Historical: rows that were returned from this batch
+                    $q2->whereNotNull('returned_at')
+                        ->whereIn('product_code', function ($sub) use ($batch) {
+                            $sub->select('product_code')
+                                ->from('import_rows')
+                                ->where('export_batch_id', $batch->id);
+                        });
+                });
+        })
+            ->orderBy('product_name')
+            ->get();
+
+        return view('sales.daily.export-detail', compact('batch', 'rows'));
     }
 }

@@ -37,6 +37,19 @@ Route::post('/sales/import/companies',                      [SalesImportControll
 Route::post('/sales/import/suppliers',                      [SalesImportController::class, 'storeSupplier'])->name('sales.import.suppliers.store');
 Route::get('/sales/history',                                [SalesImportController::class, 'history'])->name('sales.history');
 
+//product not received
+Route::post('/sales/daily/{importRow}/mark-not-received',
+    [DailySalesController::class, 'markNotReceived'])
+    ->name('sales.daily.mark-not-received');
+
+Route::post('/sales/daily/export-batch/{batchUuid}/mark-not-received',
+    [DailySalesController::class, 'markBatchItemsNotReceived'])
+    ->name('sales.daily.export-batch.mark-not-received');
+
+Route::get('/sales/daily/exports/{batchUuid}',
+    [DailySalesController::class, 'showExportDetail'])
+    ->name('sales.daily.export-detail');
+
 //export sales
 Route::get('/sales/daily',              [DailySalesController::class, 'index'])->name('sales.daily');
     Route::get('/sales/daily/export-form',  [DailySalesController::class, 'showExportForm'])->name('sales.daily.export-form');

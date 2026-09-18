@@ -17,12 +17,6 @@ return new class extends Migration
             }
             $table->index(['supplier_id', 'is_exported'], 'import_rows_supplier_exported_idx');
             $table->index('exported_at');
-            // if (!Schema::hasColumn('import_rows', 'return_reason')) {
-            //     $table->string('return_reason')->nullable()->after('exported_at');
-            // }
-            // if (!Schema::hasColumn('import_rows', 'returned_at')) {
-            //     $table->timestamp('returned_at')->nullable()->after('return_reason');
-            // }
         });
     }
 

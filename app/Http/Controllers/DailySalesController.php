@@ -75,20 +75,20 @@ class DailySalesController extends Controller
     {
         $suppliers = Supplier::orderBy('name')->get(['id', 'name']);
 
-        $selectedSupplierId = $request->input('supplier_id');
-        $selectedSupplier   = null;
-        $preview            = collect();
+        $selectedSupplier = null;
+        $exportable = collect();
+        $pending    = collect();
 
-        if ($selectedSupplierId) {
-            $selectedSupplier = Supplier::find($selectedSupplierId);
+        if ($request->filled('supplier_id')) {
+            $selectedSupplier = Supplier::find($request->supplier_id);
 
             if ($selectedSupplier) {
-                $preview = $this->exportService
-                    ->aggregatedUnexportedRows($selectedSupplier->id);
+                $exportable = $this->exportService->exportableRows($selectedSupplier->id);
+                $pending    = $this->exportService->pendingRows($selectedSupplier->id);
             }
         }
 
-        return view('sales.daily.export', compact('suppliers', 'selectedSupplier', 'preview'));
+        return view('sales.daily.export', compact('suppliers', 'selectedSupplier', 'exportable', 'pending'));
     }
 
     /* ------------------------------------------------------------------
@@ -140,46 +140,58 @@ class DailySalesController extends Controller
     //     );
     // }
     public function export(Request $request)
-    {
-        $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-            'format'      => 'required|in:csv,xlsx',
-        ]);
+{
+    $request->validate([
+        'supplier_id' => 'required|integer|exists:suppliers,id',
+        'format'      => 'required|in:csv,xlsx',
+    ]);
 
-        $supplier = Supplier::findOrFail($request->supplier_id);
-        $format   = $request->input('format', 'xlsx');
+    $supplier = Supplier::findOrFail($request->supplier_id);
+    $format   = $request->input('format', 'xlsx');
 
-        $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
+    $exportable = $this->exportService->exportableRows($supplier->id);
 
-        if ($rows->isEmpty()) {
-            return back()->with('warning', "No un-exported rows for '{$supplier->name}'.");
-        }
+    if ($exportable->isEmpty()) {
+        return back()->with('warning',
+            "No products have reached a full pack for supplier '{$supplier->name}'.");
+    }
 
-        $extension = $format === 'xlsx' ? 'xlsx' : 'csv';
-        $filename  = 'daily-sales-' . Str::slug($supplier->name)
-            . '-' . now()->format('Y-m-d-His') . '.' . $extension;
+    $totalPacks = $exportable->sum('full_packs');
+    $totalUnits = $exportable->sum(fn($r) => $r->full_packs * $r->pack_size);
 
-        $batch = ExportBatch::create([
-            'export_uuid'    => (string) Str::uuid(),
-            'supplier_id'    => $supplier->id,
-            'supplier_name'  => $supplier->name,
-            'rows_count'     => $rows->count(),
-            'total_quantity' => (float) $rows->sum('total_quantity'),
-            'filename'       => $filename,
-        ]);
+    $extension = $format === 'xlsx' ? 'xlsx' : 'csv';
+    $filename  = 'daily-sales-' . Str::slug($supplier->name)
+               . '-' . now()->format('Y-m-d-His') . '.' . $extension;
 
-        $this->exportService->markExported($supplier->id, $batch);
+    $batch = ExportBatch::create([
+        'export_uuid'    => (string) Str::uuid(),
+        'supplier_id'    => $supplier->id,
+        'supplier_name'  => $supplier->name,
+        'rows_count'     => $exportable->count(),
+        'total_quantity' => $totalPacks,
+        'filename'       => $filename,
+    ]);
 
-        $writerType = $format === 'xlsx'
-            ? \Maatwebsite\Excel\Excel::XLSX
-            : \Maatwebsite\Excel\Excel::CSV;
-
-        return \Maatwebsite\Excel\Facades\Excel::download(
-            new \App\Exports\SupplierDailySalesExport($supplier->name, $rows),
-            $filename,
-            $writerType
+    foreach ($exportable as $row) {
+        $this->exportService->markProductExported(
+            $supplier->id,
+            $batch,
+            $row->product_code,
+            $row->full_packs,
+            $row->pack_size
         );
     }
+
+    $writerType = $format === 'xlsx'
+        ? \Maatwebsite\Excel\Excel::XLSX
+        : \Maatwebsite\Excel\Excel::CSV;
+
+    return \Maatwebsite\Excel\Facades\Excel::download(
+        new \App\Exports\SupplierDailySalesExport($supplier->name, $exportable),
+        $filename,
+        $writerType
+    );
+}
     /* ------------------------------------------------------------------
      |  Export history
      * ------------------------------------------------------------------ */

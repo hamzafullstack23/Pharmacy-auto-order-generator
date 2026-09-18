@@ -3,28 +3,31 @@
 namespace App\Exports;
 
 use Illuminate\Support\Collection;
-use Illuminate\View\View;
-use Maatwebsite\Excel\Concerns\FromView;
-use Maatwebsite\Excel\Concerns\ShouldAutoSize;
-use Maatwebsite\Excel\Concerns\WithCustomCsvSettings;
+use Maatwebsite\Excel\Concerns\FromArray;
 use Maatwebsite\Excel\Concerns\WithColumnWidths;
+use Maatwebsite\Excel\Concerns\WithCustomCsvSettings;
 use Maatwebsite\Excel\Concerns\WithEvents;
-use Maatwebsite\Excel\Concerns\WithStyles;
 use Maatwebsite\Excel\Events\AfterSheet;
 use PhpOffice\PhpSpreadsheet\Style\Alignment;
 use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
-use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 
 class SupplierDailySalesExport implements
-    FromView,
-    ShouldAutoSize,
-    WithCustomCsvSettings,
+    FromArray,
     WithColumnWidths,
-    WithEvents
+    WithEvents,
+    WithCustomCsvSettings
 {
     protected string $supplierName;
     protected Collection $rows;
+
+    // Layout constants — change here, applied everywhere
+    protected int $titleRow    = 1;
+    protected int $subtitleRow = 2;
+    protected int $metaRow     = 3;
+    protected int $spacer1     = 4;
+    protected int $headerRow   = 5;
+    protected int $firstDataRow = 6;
 
     public function __construct(string $supplierName, Collection $rows)
     {
@@ -32,17 +35,56 @@ class SupplierDailySalesExport implements
         $this->rows         = $rows;
     }
 
-    public function view(): View
+    public function array(): array
     {
-        return view('exports.supplier-daily-sales', [
-            'supplierName' => $this->supplierName,
-            'rows'         => $this->rows,
-        ]);
+        $out = [];
+
+        // Row 1: Company title
+        $out[] = ['Medica Plus Pharmacy LMDC', '', '', ''];
+
+        // Row 2: Supplier
+        $out[] = ['Supplier: ' . $this->supplierName, '', '', ''];
+
+        // Row 3: Exported on
+        $out[] = ['Exported on: ' . now()->format('Y-m-d H:i:s'), '', '', ''];
+
+        // Row 4: spacer
+        $out[] = ['', '', '', ''];
+
+        // Row 5: Header row
+        $out[] = ['Product Name', 'Packs', 'Pack Size', 'Total Units'];
+
+        // Row 6+: Data
+        foreach ($this->rows as $r) {
+            $out[] = [
+                $r->product_name,
+                (int) $r->full_packs,
+                (int) $r->pack_size,
+                (int) ($r->full_packs * $r->pack_size),
+            ];
+        }
+
+        // Last row: TOTAL
+        $out[] = [
+            'TOTAL',
+            (int) $this->rows->sum('full_packs'),
+            '',
+            (int) $this->rows->sum(fn($r) => $r->full_packs * $r->pack_size),
+        ];
+
+        return $out;
     }
 
-    /**
-     * CSV fallback (kept so this class can also drive a CSV download).
-     */
+    public function columnWidths(): array
+    {
+        return [
+            'A' => 55,
+            'B' => 12,
+            'C' => 12,
+            'D' => 14,
+        ];
+    }
+
     public function getCsvSettings(): array
     {
         return [
@@ -51,39 +93,18 @@ class SupplierDailySalesExport implements
         ];
     }
 
-    /**
-     * Excel column widths (used when auto-size doesn't apply, e.g. for the index column).
-     */
-    public function columnWidths(): array
-    {
-        return [
-            'A' => 6,    // #
-            'B' => 55,   // Product Name
-            'C' => 14,   // Quantity
-        ];
-    }
-
-    /**
-     * Advanced styling applied after the sheet is built.
-     */
     public function registerEvents(): array
     {
         return [
             AfterSheet::class => function (AfterSheet $event) {
                 $sheet = $event->sheet->getDelegate();
 
-                $lastDataRow = 7 + $this->rows->count();   // see template layout
+                $lastDataRow = $this->firstDataRow + $this->rows->count() - 1;
                 $totalRow    = $lastDataRow + 1;
 
-                /* ---------- HEADER BLOCK ---------- */
-
-                // Title: rows 1-2, cells A1:C2 merged
-                $sheet->mergeCells('A1:C1');
-                $sheet->mergeCells('A2:C2');
-                $sheet->mergeCells('A3:C3');
-
-                // Company name (row 1)
-                $sheet->getStyle('A1')->applyFromArray([
+                /* ---------- TITLE (row 1) ---------- */
+                $sheet->mergeCells("A{$this->titleRow}:D{$this->titleRow}");
+                $sheet->getStyle("A{$this->titleRow}")->applyFromArray([
                     'font' => [
                         'bold'  => true,
                         'size'  => 18,
@@ -92,69 +113,56 @@ class SupplierDailySalesExport implements
                     ],
                     'fill' => [
                         'fillType'   => Fill::FILL_SOLID,
-                        'startColor' => ['rgb' => '0F766E'],    // teal-700
+                        'startColor' => ['rgb' => '0F766E'],
                     ],
                     'alignment' => [
                         'horizontal' => Alignment::HORIZONTAL_CENTER,
                         'vertical'   => Alignment::VERTICAL_CENTER,
                     ],
                 ]);
-                $sheet->getRowDimension(1)->setRowHeight(34);
+                $sheet->getRowDimension($this->titleRow)->setRowHeight(36);
 
-                // Subtitle (row 2)
-                $sheet->getStyle('A2')->applyFromArray([
+                /* ---------- SUBTITLE (row 2) ---------- */
+                $sheet->mergeCells("A{$this->subtitleRow}:D{$this->subtitleRow}");
+                $sheet->getStyle("A{$this->subtitleRow}")->applyFromArray([
                     'font' => [
                         'italic' => true,
-                        'size'   => 11,
+                        'size'   => 12,
+                        'bold'   => true,
                         'color'  => ['rgb' => '0F766E'],
                     ],
                     'fill' => [
                         'fillType'   => Fill::FILL_SOLID,
-                        'startColor' => ['rgb' => 'CCFBF1'],    // teal-100
+                        'startColor' => ['rgb' => 'CCFBF1'],
                     ],
                     'alignment' => [
                         'horizontal' => Alignment::HORIZONTAL_CENTER,
                         'vertical'   => Alignment::VERTICAL_CENTER,
                     ],
                 ]);
-                $sheet->getRowDimension(2)->setRowHeight(22);
+                $sheet->getRowDimension($this->subtitleRow)->setRowHeight(24);
 
-                // Small spacer (row 3)
-                $sheet->getRowDimension(3)->setRowHeight(8);
-
-                /* ---------- META BLOCK (rows 4-6) ---------- */
-
-                // Build the meta rows manually as text: they're already in the Blade view
-                // Style them for readability
-                foreach ([4, 5, 6] as $r) {
-                    $sheet->getStyle("A{$r}:C{$r}")->applyFromArray([
-                        'fill' => [
-                            'fillType'   => Fill::FILL_SOLID,
-                            'startColor' => ['rgb' => 'F8FAFC'],   // slate-50
-                        ],
-                        'font' => [
-                            'size' => 10,
-                            'color'=> ['rgb' => '334155'],
-                        ],
-                        'alignment' => [
-                            'vertical' => Alignment::VERTICAL_CENTER,
-                        ],
-                    ]);
-                }
-                $sheet->getStyle('A4:A6')->applyFromArray([
-                    'font' => ['bold' => true],
+                /* ---------- META (row 3) ---------- */
+                $sheet->mergeCells("A{$this->metaRow}:D{$this->metaRow}");
+                $sheet->getStyle("A{$this->metaRow}")->applyFromArray([
+                    'font' => [
+                        'italic' => true,
+                        'size'   => 9,
+                        'color'  => ['rgb' => '64748B'],
+                    ],
+                    'alignment' => [
+                        'horizontal' => Alignment::HORIZONTAL_LEFT,
+                        'vertical'   => Alignment::VERTICAL_CENTER,
+                    ],
                 ]);
-                $sheet->getRowDimension(4)->setRowHeight(18);
-                $sheet->getRowDimension(5)->setRowHeight(18);
-                $sheet->getRowDimension(6)->setRowHeight(18);
+                $sheet->getRowDimension($this->metaRow)->setRowHeight(16);
 
-                // Row 7 spacer
-                $sheet->getRowDimension(7)->setRowHeight(6);
+                /* ---------- SPACER (row 4) ---------- */
+                $sheet->getRowDimension($this->spacer1)->setRowHeight(8);
 
-                /* ---------- TABLE HEADER (row 8) ---------- */
-
-                $headerRow = 8;
-                $sheet->getStyle("A{$headerRow}:C{$headerRow}")->applyFromArray([
+                /* ---------- HEADER (row 5) ---------- */
+                $headerRange = "A{$this->headerRow}:D{$this->headerRow}";
+                $sheet->getStyle($headerRange)->applyFromArray([
                     'font' => [
                         'bold'  => true,
                         'size'  => 11,
@@ -162,7 +170,7 @@ class SupplierDailySalesExport implements
                     ],
                     'fill' => [
                         'fillType'   => Fill::FILL_SOLID,
-                        'startColor' => ['rgb' => '1E293B'],   // slate-800
+                        'startColor' => ['rgb' => '1E293B'],
                     ],
                     'alignment' => [
                         'horizontal' => Alignment::HORIZONTAL_LEFT,
@@ -175,20 +183,19 @@ class SupplierDailySalesExport implements
                         ],
                     ],
                 ]);
-                // Quantity column header aligned right
-                $sheet->getStyle("C{$headerRow}")
-                      ->getAlignment()
-                      ->setHorizontal(Alignment::HORIZONTAL_RIGHT);
 
-                $sheet->getRowDimension($headerRow)->setRowHeight(26);
+                // Right-align the numeric headers (B, C, D)
+                foreach (['B', 'C', 'D'] as $col) {
+                    $sheet->getStyle("{$col}{$this->headerRow}")
+                        ->getAlignment()
+                        ->setHorizontal(Alignment::HORIZONTAL_CENTER);
+                }
+
+                $sheet->getRowDimension($this->headerRow)->setRowHeight(26);
 
                 /* ---------- DATA ROWS ---------- */
-
-                $firstDataRow = $headerRow + 1;
-                $lastDataRow  = $headerRow + $this->rows->count();
-
-                // Apply borders to all data cells
-                $sheet->getStyle("A{$firstDataRow}:C{$lastDataRow}")->applyFromArray([
+                $dataRange = "A{$this->firstDataRow}:D{$lastDataRow}";
+                $sheet->getStyle($dataRange)->applyFromArray([
                     'borders' => [
                         'allBorders' => [
                             'borderStyle' => Border::BORDER_THIN,
@@ -200,39 +207,30 @@ class SupplierDailySalesExport implements
                     ],
                     'alignment' => [
                         'vertical' => Alignment::VERTICAL_CENTER,
+                        'wrapText' => true,
                     ],
                 ]);
 
-                // Alternating row shading (zebra stripes)
-                for ($i = $firstDataRow; $i <= $lastDataRow; $i++) {
-                    if (($i - $firstDataRow) % 2 === 1) {
-                        $sheet->getStyle("A{$i}:C{$i}")->applyFromArray([
+                // Alternating rows
+                for ($i = $this->firstDataRow; $i <= $lastDataRow; $i++) {
+                    if (($i - $this->firstDataRow) % 2 === 1) {
+                        $sheet->getStyle("A{$i}:D{$i}")->applyFromArray([
                             'fill' => [
                                 'fillType'   => Fill::FILL_SOLID,
-                                'startColor' => ['rgb' => 'F1F5F9'],   // slate-100
+                                'startColor' => ['rgb' => 'F1F5F9'],
                             ],
                         ]);
                     }
                     $sheet->getRowDimension($i)->setRowHeight(20);
                 }
 
-                // Right-align quantity column
-                $sheet->getStyle("C{$firstDataRow}:C{$lastDataRow}")
-                      ->getAlignment()
-                      ->setHorizontal(Alignment::HORIZONTAL_RIGHT);
-
-                // Center the index column
-                $sheet->getStyle("A{$firstDataRow}:A{$lastDataRow}")
-                      ->getAlignment()
-                      ->setHorizontal(Alignment::HORIZONTAL_CENTER);
+                // Center the pack columns
+                $sheet->getStyle("B{$this->firstDataRow}:D{$lastDataRow}")
+                    ->getAlignment()
+                    ->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
                 /* ---------- TOTAL ROW ---------- */
-
-                $totalRow = $lastDataRow + 1;
-
-                $sheet->mergeCells("A{$totalRow}:B{$totalRow}");
-
-                $sheet->getStyle("A{$totalRow}:C{$totalRow}")->applyFromArray([
+                $sheet->getStyle("A{$totalRow}:D{$totalRow}")->applyFromArray([
                     'font' => [
                         'bold'  => true,
                         'size'  => 11,
@@ -240,11 +238,10 @@ class SupplierDailySalesExport implements
                     ],
                     'fill' => [
                         'fillType'   => Fill::FILL_SOLID,
-                        'startColor' => ['rgb' => 'E2E8F0'],   // slate-200
+                        'startColor' => ['rgb' => 'E2E8F0'],
                     ],
                     'alignment' => [
-                        'horizontal' => Alignment::HORIZONTAL_RIGHT,
-                        'vertical'   => Alignment::VERTICAL_CENTER,
+                        'vertical' => Alignment::VERTICAL_CENTER,
                     ],
                     'borders' => [
                         'top' => [
@@ -266,43 +263,15 @@ class SupplierDailySalesExport implements
                     ],
                 ]);
 
-                $sheet->getStyle("A{$totalRow}")
-                      ->getAlignment()
-                      ->setHorizontal(Alignment::HORIZONTAL_RIGHT);
+                $sheet->getStyle("B{$totalRow}:D{$totalRow}")
+                    ->getAlignment()
+                    ->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
                 $sheet->getRowDimension($totalRow)->setRowHeight(26);
 
-                /* ---------- FOOTER ---------- */
-
-                $footerRow = $totalRow + 2;
-                $sheet->mergeCells("A{$footerRow}:C{$footerRow}");
-
-                $sheet->getStyle("A{$footerRow}")->applyFromArray([
-                    'font' => [
-                        'italic' => true,
-                        'size'   => 9,
-                        'color'  => ['rgb' => '94A3B8'],
-                    ],
-                    'alignment' => [
-                        'horizontal' => Alignment::HORIZONTAL_CENTER,
-                    ],
-                ]);
-
                 /* ---------- MISC ---------- */
-
-                // Freeze below the header row (row 8) so scrolling keeps it visible
-                $sheet->freezePane('A9');
-
-                // Hide gridlines for a cleaner look
+                $sheet->freezePane("A" . ($this->firstDataRow));
                 $sheet->setShowGridlines(false);
-
-                // Page setup for printing
-                $sheet->getPageSetup()
-                      ->setOrientation(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::ORIENTATION_PORTRAIT)
-                      ->setPaperSize(\PhpOffice\PhpSpreadsheet\Worksheet\PageSetup::PAPERSIZE_A4);
-
-                $sheet->getPageMargins()
-                      ->setTop(0.5)->setBottom(0.5)->setLeft(0.5)->setRight(0.5);
             },
         ];
     }

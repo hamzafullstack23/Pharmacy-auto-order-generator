@@ -43,24 +43,25 @@
         </form>
 
         @if($selectedSupplier)
-        <div class="bg-white rounded-lg shadow p-4">
-            <div class="flex items-center justify-between mb-3">
-                <div>
-                    <h2 class="text-lg font-semibold">{{ $selectedSupplier->name }}</h2>
-                    <p class="text-xs text-gray-500">
-                        Un-exported product rows: {{ $preview->count() }} ·
-                        Total quantity: {{ number_format($preview->sum('total_quantity'), 2) }}
-                    </p>
-                </div>
-                @if($preview->isNotEmpty())
-                <form method="POST" action="{{ route('sales.daily.export') }}" class="flex items-center gap-3">
+        <div class="bg-white rounded-lg shadow p-4 space-y-6">
+
+            {{-- Exportable products --}}
+            <div>
+                <h2 class="text-lg font-semibold mb-1">{{ $selectedSupplier->name }}</h2>
+                <p class="text-xs text-gray-500 mb-3">
+                    {{ $exportable->count() }} product(s) ready to export ·
+                    {{ $pending->count() }} waiting for full pack
+                </p>
+
+                @if($exportable->isNotEmpty())
+                <form method="POST" action="{{ route('sales.daily.export') }}" class="mb-3 flex items-center gap-3">
                     @csrf
                     <input type="hidden" name="supplier_id" value="{{ $selectedSupplier->id }}">
 
                     <label class="text-sm font-medium text-gray-700">Format:</label>
                     <select name="format" class="border rounded p-2 text-sm">
-                        <option value="xlsx" selected>Excel (.xlsx) — styled</option>
-                        <option value="csv">CSV (.csv) — plain text</option>
+                        <option value="xlsx" selected>Excel (.xlsx)</option>
+                        <option value="csv">CSV (.csv)</option>
                     </select>
 
                     <button type="submit"
@@ -68,34 +69,81 @@
                         <i class="fas fa-download mr-2"></i> Export & Mark as Done
                     </button>
                 </form>
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm divide-y divide-gray-200 border">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product Name</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Units</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Pack Size</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Packs</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Remainder</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            @foreach($exportable as $r)
+                            <tr>
+                                <td class="px-3 py-2">{{ $r->product_name }}</td>
+                                <td class="px-3 py-2 text-right">{{ number_format($r->total_units) }}</td>
+                                <td class="px-3 py-2 text-right">{{ number_format($r->pack_size) }}</td>
+                                <td class="px-3 py-2 text-right font-bold text-green-700">{{ number_format($r->full_packs) }}</td>
+                                <td class="px-3 py-2 text-right text-gray-500">
+                                    {{ $r->remainder > 0 ? number_format($r->remainder) : '—' }}
+                                </td>
+                            </tr>
+                            @endforeach
+                            <tr class="bg-gray-50 font-semibold">
+                                <td class="px-3 py-2 text-right" colspan="3">TOTAL</td>
+                                <td class="px-3 py-2 text-right">
+                                    {{ number_format($exportable->sum('full_packs')) }}
+                                </td>
+                                <td class="px-3 py-2 text-right text-gray-500">
+                                    {{ number_format($exportable->sum('remainder')) }}
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                @else
+                <p class="text-sm text-gray-500 py-6 text-center">
+                    No products have reached a full pack yet. They'll be included once the quantity matches the pack size.
+                </p>
                 @endif
             </div>
 
-            @if($preview->isEmpty())
-            <p class="text-sm text-gray-500 py-8 text-center">No un-exported rows for this supplier.</p>
-            @else
-            <div class="overflow-x-auto">
-                <table class="min-w-full text-sm divide-y divide-gray-200">
-                    <thead class="bg-gray-50">
-                        <tr>
-                            <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Product Name</th>
-                            <th class="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Quantity</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-gray-100">
-                        @foreach($preview as $row)
-                        <tr>
-                            <td class="px-3 py-2">{{ $row->product_name }}</td>
-                            <td class="px-3 py-2 text-right font-medium">{{ number_format($row->total_quantity, 2) }}</td>
-                        </tr>
-                        @endforeach
-                        <tr class="bg-gray-50 font-semibold">
-                            <td class="px-3 py-2 text-right">TOTAL</td>
-                            <td class="px-3 py-2 text-right">{{ number_format($preview->sum('total_quantity'), 2) }}</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
+            {{-- Pending products --}}
+            @if($pending->isNotEmpty())
+            <details class="border-t pt-4">
+                <summary class="cursor-pointer font-medium text-sm text-gray-700">
+                    <i class="fas fa-hourglass-half mr-1 text-orange-500"></i>
+                    {{ $pending->count() }} product(s) waiting for full pack
+                </summary>
+                <div class="overflow-x-auto mt-3">
+                    <table class="min-w-full text-sm divide-y divide-gray-200">
+                        <thead class="bg-orange-50">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-medium text-orange-700 uppercase">Product Name</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-orange-700 uppercase">Units</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-orange-700 uppercase">Pack Size</th>
+                                <th class="px-3 py-2 text-right text-xs font-medium text-orange-700 uppercase">Needed</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-100">
+                            @foreach($pending as $r)
+                            <tr>
+                                <td class="px-3 py-2">{{ $r->product_name }}</td>
+                                <td class="px-3 py-2 text-right">{{ number_format($r->total_units) }}</td>
+                                <td class="px-3 py-2 text-right">{{ number_format($r->pack_size) }}</td>
+                                <td class="px-3 py-2 text-right text-orange-600">
+                                    {{ number_format($r->pack_size - $r->total_units) }} more
+                                </td>
+                            </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+            </details>
             @endif
         </div>
         @endif

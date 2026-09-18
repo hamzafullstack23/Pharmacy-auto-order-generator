@@ -90,52 +90,92 @@ class DailySalesController extends Controller
     /* ------------------------------------------------------------------
      |  Perform export
      * ------------------------------------------------------------------ */
+    // public function export(Request $request)
+    // {
+    //     $request->validate([
+    //         'supplier_id' => 'required|integer|exists:suppliers,id',
+    //     ]);
+
+    //     $supplier = Supplier::findOrFail($request->supplier_id);
+
+    //     $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
+
+    //     if ($rows->isEmpty()) {
+    //         return back()->with('warning', "No un-exported rows found for supplier '{$supplier->name}'.");
+    //     }
+
+    //     $totalQty = (float) $rows->sum('total_quantity');
+
+    //     $filename = 'daily-sales-' . Str::slug($supplier->name)
+    //               . '-' . now()->format('Y-m-d-His') . '.csv';
+
+    //     $batch = ExportBatch::create([
+    //         'export_uuid'    => (string) Str::uuid(),
+    //         'supplier_id'    => $supplier->id,
+    //         'supplier_name'  => $supplier->name,
+    //         'rows_count'     => $rows->count(),
+    //         'total_quantity' => $totalQty,
+    //         'filename'       => $filename,
+    //     ]);
+
+    //     $marked = $this->exportService->markExported($supplier->id, $batch);
+
+    //     Log::info('Daily sales exported', [
+    //         'supplier_id' => $supplier->id,
+    //         'supplier'    => $supplier->name,
+    //         'aggregated_rows' => $rows->count(),
+    //         'marked_import_rows' => $marked,
+    //         'total_quantity' => $totalQty,
+    //         'batch_uuid'  => $batch->export_uuid,
+    //     ]);
+
+    //     return Excel::download(
+    //         new SupplierDailySalesExport($supplier->name, $rows),
+    //         $filename,
+    //         ExcelType::CSV
+    //     );
+    // }
     public function export(Request $request)
-    {
-        $request->validate([
-            'supplier_id' => 'required|integer|exists:suppliers,id',
-        ]);
+{
+    $request->validate([
+        'supplier_id' => 'required|integer|exists:suppliers,id',
+        'format'      => 'required|in:csv,xlsx',
+    ]);
 
-        $supplier = Supplier::findOrFail($request->supplier_id);
+    $supplier = Supplier::findOrFail($request->supplier_id);
+    $format   = $request->input('format', 'xlsx');
 
-        $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
+    $rows = $this->exportService->aggregatedUnexportedRows($supplier->id);
 
-        if ($rows->isEmpty()) {
-            return back()->with('warning', "No un-exported rows found for supplier '{$supplier->name}'.");
-        }
-
-        $totalQty = (float) $rows->sum('total_quantity');
-
-        $filename = 'daily-sales-' . Str::slug($supplier->name)
-                  . '-' . now()->format('Y-m-d-His') . '.csv';
-
-        $batch = ExportBatch::create([
-            'export_uuid'    => (string) Str::uuid(),
-            'supplier_id'    => $supplier->id,
-            'supplier_name'  => $supplier->name,
-            'rows_count'     => $rows->count(),
-            'total_quantity' => $totalQty,
-            'filename'       => $filename,
-        ]);
-
-        $marked = $this->exportService->markExported($supplier->id, $batch);
-
-        Log::info('Daily sales exported', [
-            'supplier_id' => $supplier->id,
-            'supplier'    => $supplier->name,
-            'aggregated_rows' => $rows->count(),
-            'marked_import_rows' => $marked,
-            'total_quantity' => $totalQty,
-            'batch_uuid'  => $batch->export_uuid,
-        ]);
-
-        return Excel::download(
-            new SupplierDailySalesExport($supplier->name, $rows),
-            $filename,
-            ExcelType::CSV
-        );
+    if ($rows->isEmpty()) {
+        return back()->with('warning', "No un-exported rows for '{$supplier->name}'.");
     }
 
+    $extension = $format === 'xlsx' ? 'xlsx' : 'csv';
+    $filename  = 'daily-sales-' . Str::slug($supplier->name)
+               . '-' . now()->format('Y-m-d-His') . '.' . $extension;
+
+    $batch = ExportBatch::create([
+        'export_uuid'    => (string) Str::uuid(),
+        'supplier_id'    => $supplier->id,
+        'supplier_name'  => $supplier->name,
+        'rows_count'     => $rows->count(),
+        'total_quantity' => (float) $rows->sum('total_quantity'),
+        'filename'       => $filename,
+    ]);
+
+    $this->exportService->markExported($supplier->id, $batch);
+
+    $writerType = $format === 'xlsx'
+        ? \Maatwebsite\Excel\Excel::XLSX
+        : \Maatwebsite\Excel\Excel::CSV;
+
+    return \Maatwebsite\Excel\Facades\Excel::download(
+        new \App\Exports\SupplierDailySalesExport($supplier->name, $rows),
+        $filename,
+        $writerType
+    );
+}
     /* ------------------------------------------------------------------
      |  Export history
      * ------------------------------------------------------------------ */

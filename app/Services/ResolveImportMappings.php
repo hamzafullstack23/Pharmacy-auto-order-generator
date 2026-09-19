@@ -158,17 +158,29 @@ class ResolveImportMappings
 
     /**
      * Handle a single missing medicine: either CREATE it or SKIP it.
+     *
+     * Interpretation A:
+     *  - Pick from dropdown  → use the existing record.
+     *  - Type a name         → ALWAYS create a NEW supplier / company.
+     *  - On create, bind the medicine to the supplier via medicine_supplier
+     *    immediately, and set the medicine's company_id.
      */
     public function resolveMedicine(
         ImportBatch $batch,
         string $productCode,
         string $action,
         ?int $companyId = null,
-        ?int $supplierId = null
+        ?int $supplierId = null,
+        ?string $newCompany = null,
+        ?string $newSupplier = null
     ): array {
-        DB::transaction(function () use ($batch, $productCode, $action, $companyId, $supplierId) {
+        DB::transaction(function () use (
+            $batch, $productCode, $action,
+            $companyId, $supplierId,
+            $newCompany, $newSupplier
+        ) {
+            // ---------- SKIP ----------
             if ($action === 'skip') {
-                // Mark all rows with this product code as skipped
                 ImportRow::where('import_batch_id', $batch->id)
                     ->where('product_code', $productCode)
                     ->where('status', 'pending')
@@ -179,44 +191,107 @@ class ResolveImportMappings
                 return;
             }
 
-            if ($action === 'create') {
-                if (!$companyId) {
-                    throw new \InvalidArgumentException('company_id is required to create a medicine.');
+            if ($action !== 'create') {
+                throw new \InvalidArgumentException("Unknown action: {$action}");
+            }
+
+            /* ---------- 1. Resolve SUPPLIER ---------- */
+            $supplier = null;
+
+            if ($supplierId) {
+                // Picked from dropdown
+                $supplier = Supplier::find($supplierId);
+                if (!$supplier) {
+                    throw new \RuntimeException("Supplier #{$supplierId} not found.");
+                }
+            } elseif ($newSupplier !== null && trim($newSupplier) !== '') {
+                // Typed name → ALWAYS create a new supplier
+                $supplier = Supplier::create([
+                    'name'      => trim($newSupplier),
+                    'is_active' => true,
+                ]);
+            }
+
+            if (!$supplier) {
+                throw new \InvalidArgumentException('Supplier is required to create a medicine.');
+            }
+
+            /* ---------- 2. Resolve COMPANY ---------- */
+            $company = null;
+
+            if ($companyId) {
+                // Picked from dropdown
+                $company = Company::find($companyId);
+                if (!$company) {
+                    throw new \RuntimeException("Company #{$companyId} not found.");
                 }
 
-                // Find the sample row to get product_name
-                $sample = ImportRow::where('import_batch_id', $batch->id)
-                    ->where('product_code', $productCode)
-                    ->first();
-
-                if (!$sample) {
-                    throw new \RuntimeException("No import rows found for product code {$productCode}.");
+                // Attach the supplier if the company has none
+                if (empty($company->supplier_id)) {
+                    $company->update(['supplier_id' => $supplier->id]);
                 }
+            } elseif ($newCompany !== null && trim($newCompany) !== '') {
+                // Typed name → create a new company attached to the supplier
+                $company = Company::create([
+                    'name'        => trim($newCompany),
+                    'supplier_id' => $supplier->id,
+                    'is_active'   => true,
+                ]);
+            }
 
-                // Create the medicine
+            if (!$company) {
+                throw new \InvalidArgumentException('Company is required to create a medicine.');
+            }
+
+            /* ---------- 3. Sample row for product_name ---------- */
+            $sample = ImportRow::where('import_batch_id', $batch->id)
+                ->where('product_code', $productCode)
+                ->first();
+
+            if (!$sample) {
+                throw new \RuntimeException("No import rows found for product code {$productCode}.");
+            }
+
+            /* ---------- 4. Create the medicine (idempotent) ---------- */
+            $medicine = Medicine::where('product_code', $productCode)->first();
+
+            if (!$medicine) {
                 $medicine = Medicine::create([
                     'product_code' => $sample->product_code,
                     'name'         => $sample->product_name,
-                    'company_id'   => $companyId,
+                    'company_id'   => $company->id,
                     'pack_type'    => 'loose',
                     'current_stock'=> 0,
                     'is_active'    => true,
                 ]);
-
-                // Link the supplier via medicine_supplier
-                if ($supplierId) {
-                    DB::table('medicine_supplier')->insert([
-                        'medicine_id' => $medicine->id,
-                        'supplier_id' => $supplierId,
-                        'is_primary'  => 1,
-                        'created_at'  => now(),
-                        'updated_at'  => now(),
-                    ]);
-                }
-                return;
             }
 
-            throw new \InvalidArgumentException("Unknown action: {$action}");
+            /* ---------- 5. Bind medicine ↔ supplier (pivot) ---------- */
+            $pivotExists = DB::table('medicine_supplier')
+                ->where('medicine_id', $medicine->id)
+                ->where('supplier_id', $supplier->id)
+                ->exists();
+
+            if (!$pivotExists) {
+                DB::table('medicine_supplier')->insert([
+                    'medicine_id' => $medicine->id,
+                    'supplier_id' => $supplier->id,
+                    'is_primary'  => 1,
+                    'created_at'  => now(),
+                    'updated_at'  => now(),
+                ]);
+            }
+
+            /* ---------- 6. Mark all pending rows of this code as resolved ---------- */
+            ImportRow::where('import_batch_id', $batch->id)
+                ->where('product_code', $productCode)
+                ->where('status', 'pending')
+                ->update([
+                    'medicine_id' => $medicine->id,
+                    'supplier_id' => $supplier->id,
+                    'company_id'  => $company->id,
+                    'status'      => 'resolved',
+                ]);
         });
 
         return $this->resolveBatch($batch);

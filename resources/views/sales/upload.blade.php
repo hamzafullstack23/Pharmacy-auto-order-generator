@@ -106,20 +106,18 @@
                                             <option :value="c.id" x-text="c.name"></option>
                                         </template>
                                     </select>
-                                    <div class="mt-2 flex items-center gap-2">
-                                        <input type="text" placeholder="Or type new company name"
-                                               x-model="newCompany.name"
-                                               class="flex-1 border rounded p-1 text-sm">
-                                        <button type="button" @click="createNewCompany"
-                                                class="text-indigo-600 hover:text-indigo-800 text-sm font-medium whitespace-nowrap">
-                                            + Create
-                                        </button>
-                                    </div>
+                                    <input type="text"
+                                           placeholder="Or type new company name"
+                                           x-model="newMedicine.company_name"
+                                           class="mt-2 w-full border rounded p-1 text-sm">
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        Typing a name creates a new company linked to the chosen supplier.
+                                    </p>
                                 </div>
 
                                 {{-- Supplier --}}
                                 <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-1">Supplier</label>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Supplier *</label>
                                     <select x-model="newMedicine.supplier_id"
                                             class="w-full border rounded p-2 text-sm">
                                         <option value="">-- Select supplier --</option>
@@ -127,22 +125,20 @@
                                             <option :value="s.id" x-text="s.name"></option>
                                         </template>
                                     </select>
-                                    <div class="mt-2 flex items-center gap-2">
-                                        <input type="text" placeholder="Or type new supplier name"
-                                               x-model="newSupplier.name"
-                                               class="flex-1 border rounded p-1 text-sm">
-                                        <button type="button" @click="createNewSupplier"
-                                                class="text-indigo-600 hover:text-indigo-800 text-sm font-medium whitespace-nowrap">
-                                            + Create
-                                        </button>
-                                    </div>
+                                    <input type="text"
+                                           placeholder="Or type new supplier name"
+                                           x-model="newMedicine.supplier_name"
+                                           class="mt-2 w-full border rounded p-1 text-sm">
+                                    <p class="text-xs text-gray-500 mt-1">
+                                        Typing a name creates a new supplier and links it to this medicine.
+                                    </p>
                                 </div>
                             </div>
 
                             <div class="flex items-center space-x-3 pt-2 border-t">
                                 <button type="button" @click="resolveMedicineAction('create')"
                                         class="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50"
-                                        :disabled="loading || !newMedicine.company_id">
+                                        :disabled="loading">
                                     <i class="fas fa-plus mr-2"></i> Create & Continue
                                 </button>
                                 <button type="button" @click="resolveMedicineAction('skip')"
@@ -286,10 +282,13 @@ function salesImport() {
         allSuppliers: [],
         allCompanies: [],
 
-        // Missing medicine form state
-        newMedicine: { company_id: '', supplier_id: '' },
-        newCompany:  { name: '' },
-        newSupplier: { name: '' },
+        // Missing medicine form state — now holds both IDs AND typed names
+        newMedicine: {
+            company_id:    '',
+            supplier_id:   '',
+            company_name:  '',
+            supplier_name: '',
+        },
 
         // Unlinked medicine form state
         unlinkedSupplierId: '',
@@ -333,10 +332,13 @@ function salesImport() {
                 this.totalUnlinkedMedicines = data.total_unlinked_medicines || 0;
                 this.affectedRows           = data.affected_rows || [];
 
-                // Reset per-item form state
-                this.newMedicine = { company_id: '', supplier_id: '' };
-                this.newCompany  = { name: '' };
-                this.newSupplier = { name: '' };
+                // Reset per-item form state on every pause
+                this.newMedicine = {
+                    company_id:    '',
+                    supplier_id:   '',
+                    company_name:  '',
+                    supplier_name: '',
+                };
                 this.unlinkedSupplierId = '';
 
                 await this.loadOptions();
@@ -359,55 +361,29 @@ function salesImport() {
             }
         },
 
-        // ---------- Create new company inline ----------
-        async createNewCompany() {
-            if (!this.newCompany.name) {
-                alert('Enter a company name first.');
-                return;
-            }
-            try {
-                const company = await window.apiFetch('{{ route('sales.import.companies.store') }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: this.newCompany.name }),
-                });
-                this.allCompanies.push(company);
-                this.newMedicine.company_id = company.id;
-                this.newCompany.name = '';
-            } catch (e) {
-                alert('Failed to create company: ' + e.message);
-            }
-        },
-
-        // ---------- Create new supplier inline ----------
-        async createNewSupplier() {
-            if (!this.newSupplier.name) {
-                alert('Enter a supplier name first.');
-                return;
-            }
-            try {
-                const supplier = await window.apiFetch('{{ route('sales.import.suppliers.store') }}', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: this.newSupplier.name }),
-                });
-                this.allSuppliers.push(supplier);
-                this.newMedicine.supplier_id = supplier.id;
-                this.newSupplier.name = '';
-            } catch (e) {
-                alert('Failed to create supplier: ' + e.message);
-            }
-        },
-
         // ---------- Resolve ONE missing medicine: create or skip ----------
         async resolveMedicineAction(action) {
             if (!this.missingMedicines.length) return;
 
             const productCode = this.missingMedicines[0].product_code;
 
-            if (action === 'create' && !this.newMedicine.company_id) {
-                alert('Please select a company first.');
-                return;
+            if (action === 'create') {
+                const hasCompany =
+                    this.newMedicine.company_id ||
+                    (this.newMedicine.company_name || '').trim() !== '';
+
+                const hasSupplier =
+                    this.newMedicine.supplier_id ||
+                    (this.newMedicine.supplier_name || '').trim() !== '';
+
+                if (!hasCompany) {
+                    alert('Please pick or type a company.');
+                    return;
+                }
+                if (!hasSupplier) {
+                    alert('Please pick or type a supplier.');
+                    return;
+                }
             }
 
             this.loading = true;
@@ -417,10 +393,12 @@ function salesImport() {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        product_code: productCode,
-                        action: action,
-                        company_id:  this.newMedicine.company_id || null,
-                        supplier_id: this.newMedicine.supplier_id || null,
+                        product_code:      productCode,
+                        action:            action,
+                        company_id:        this.newMedicine.company_id    || null,
+                        supplier_id:       this.newMedicine.supplier_id   || null,
+                        new_company_name:  (this.newMedicine.company_name  || '').trim() || null,
+                        new_supplier_name: (this.newMedicine.supplier_name || '').trim() || null,
                     }),
                 });
                 await this.handleResponse(data);
@@ -475,9 +453,12 @@ function salesImport() {
                 errors: [],
                 allSuppliers: [],
                 allCompanies: [],
-                newMedicine: { company_id: '', supplier_id: '' },
-                newCompany:  { name: '' },
-                newSupplier: { name: '' },
+                newMedicine: {
+                    company_id:    '',
+                    supplier_id:   '',
+                    company_name:  '',
+                    supplier_name: '',
+                },
                 unlinkedSupplierId: '',
             });
             if (this.$refs.file) this.$refs.file.value = '';

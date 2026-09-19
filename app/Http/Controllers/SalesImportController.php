@@ -343,11 +343,33 @@ class SalesImportController extends Controller
         $request->headers->set('Accept', 'application/json');
 
         $data = $request->validate([
-            'product_code' => 'required|string',
-            'action'       => 'required|in:create,skip',
-            'company_id'   => 'nullable|integer|exists:companies,id',
-            'supplier_id'  => 'nullable|integer|exists:suppliers,id',
+            'product_code'      => 'required|string',
+            'action'            => 'required|in:create,skip',
+            'company_id'        => 'nullable|integer|exists:companies,id',
+            'supplier_id'       => 'nullable|integer|exists:suppliers,id',
+            'new_company_name'  => 'nullable|string|max:255',
+            'new_supplier_name' => 'nullable|string|max:255',
         ]);
+
+        // Pre-flight validation for action = create
+        if ($data['action'] === 'create') {
+            $hasCompany  = !empty($data['company_id'])  || !empty($data['new_company_name']);
+            $hasSupplier = !empty($data['supplier_id']) || !empty($data['new_supplier_name']);
+
+            if (!$hasCompany) {
+                return response()->json([
+                    'status'  => 'failed',
+                    'message' => 'Company is required. Pick one or type a new name.',
+                ], 422);
+            }
+
+            if (!$hasSupplier) {
+                return response()->json([
+                    'status'  => 'failed',
+                    'message' => 'Supplier is required. Pick one or type a new name.',
+                ], 422);
+            }
+        }
 
         $batch = ImportBatch::where('batch_uuid', $batchUuid)->firstOrFail();
 
@@ -356,16 +378,28 @@ class SalesImportController extends Controller
                 $batch,
                 $data['product_code'],
                 $data['action'],
-                $data['company_id'] ?? null,
-                $data['supplier_id'] ?? null
+                $data['company_id']        ?? null,
+                $data['supplier_id']       ?? null,
+                $data['new_company_name']  ?? null,
+                $data['new_supplier_name'] ?? null
             );
 
             $batch->update(['missing_entities' => $resolution]);
 
             return $this->buildPauseOrCommitResponse($batch, $resolution);
         } catch (\Throwable $e) {
-            Log::error('resolveMedicine failed', ['message' => $e->getMessage()]);
-            return response()->json(['status' => 'failed', 'message' => $e->getMessage()], 500);
+            Log::error('resolveMedicine failed', [
+                'batch_uuid'   => $batchUuid,
+                'product_code' => $data['product_code'],
+                'action'       => $data['action'],
+                'message'      => $e->getMessage(),
+                'trace'        => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'status'  => 'failed',
+                'message' => $e->getMessage(),
+            ], 500);
         }
     }
 

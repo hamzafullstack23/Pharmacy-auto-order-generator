@@ -4,7 +4,6 @@ namespace App\Imports;
 
 use App\Models\ImportBatch;
 use App\Models\ImportRow;
-use App\Models\Medicine;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
@@ -14,11 +13,11 @@ use Maatwebsite\Excel\Concerns\SkipsOnError;
 use Maatwebsite\Excel\Concerns\SkipsOnFailure;
 use Maatwebsite\Excel\Concerns\ToCollection;
 use Maatwebsite\Excel\Concerns\WithChunkReading;
+use Maatwebsite\Excel\Concerns\WithCustomCsvSettings;
 use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Maatwebsite\Excel\Concerns\WithValidation;
 use Maatwebsite\Excel\Validators\Failure;
 use Throwable;
-use App\Support\StringSanitizer;
 
 class DailySalesImport implements
     ToCollection,
@@ -27,23 +26,50 @@ class DailySalesImport implements
     WithValidation,
     SkipsEmptyRows,
     SkipsOnFailure,
-    SkipsOnError
+    SkipsOnError,
+    WithCustomCsvSettings
 {
     use Importable;
 
     protected string $saleDate;
     protected ImportBatch $batch;
+
     protected array $errors = [];
     protected int $stagedCount = 0;
     protected int $skippedCount = 0;
+    protected int $duplicateCount = 0;
+    protected int $excludedCount = 0;
     protected int $rowCursor = 0;
+
+    /** Cached exclusion list (lowercased). */
+    protected array $excludedCodes = [];
 
     public function __construct(string $saleDate, ImportBatch $batch)
     {
         $this->saleDate = Carbon::parse($saleDate)->format('Y-m-d');
-        $this->batch = $batch;
+        $this->batch    = $batch;
+
+        // Load exclusions once, normalize to lowercase for case-insensitive matching
+        $raw = (array) config('import_exclusions.product_codes', []);
+        $this->excludedCodes = array_map(
+            fn($c) => strtolower(trim((string) $c)),
+            $raw
+        );
     }
 
+    /* -------------------------------------------------------------------
+     |  CSV reading settings (encoding fix)
+     * ------------------------------------------------------------------ */
+    public function getCsvSettings(): array
+    {
+        return [
+            'input_encoding' => 'Windows-1252',
+        ];
+    }
+
+    /* -------------------------------------------------------------------
+     |  Validation
+     * ------------------------------------------------------------------ */
     public function prepareForValidation($row): array
     {
         $prepared = [];
@@ -71,6 +97,8 @@ class DailySalesImport implements
 
     protected function normalizeColumnName(string $column): string
     {
+        $column = preg_replace('/^\xEF\xBB\xBF/', '', $column);
+        $column = preg_replace('/^\x{FEFF}/u', '', $column);
         $column = trim($column);
 
         $exactMatches = [
@@ -115,10 +143,13 @@ class DailySalesImport implements
         ];
     }
 
+    /* -------------------------------------------------------------------
+     |  Staging loop — this is where duplicate & exclusion checks happen
+     * ------------------------------------------------------------------ */
     public function collection(Collection $rows): void
     {
         $inserts = [];
-        $now = now();
+        $now     = now();
 
         foreach ($rows as $row) {
             $this->rowCursor++;
@@ -130,9 +161,22 @@ class DailySalesImport implements
             $rawDate     = $row['date'] ?? $row['sale_date'] ?? null;
             $saleDate    = !empty($rawDate) ? $this->parseDate($rawDate) : $this->saleDate;
 
+            // Basic validation guard (in case validation was skipped)
             if (empty($productCode) || empty($productName) || $quantity <= 0) {
                 $this->skippedCount++;
                 $this->errors[] = "Row {$this->rowCursor}: Missing/invalid data.";
+                continue;
+            }
+
+            // ---------- Exclusion check ----------
+            if (in_array(strtolower($productCode), $this->excludedCodes, true)) {
+                $this->excludedCount++;
+                continue;
+            }
+
+            // ---------- Duplicate check (per row: date + code + quantity) ----------
+            if ($this->rowAlreadyExists($saleDate, $productCode, $quantity)) {
+                $this->duplicateCount++;
                 continue;
             }
 
@@ -140,7 +184,7 @@ class DailySalesImport implements
                 'import_batch_id' => $this->batch->id,
                 'row_number'      => $this->rowCursor,
                 'product_code'    => $productCode,
-                'product_name'    => StringSanitizer::cleanName($productName ?? null),
+                'product_name'    => $productName,
                 'quantity'        => $quantity,
                 'sale_date'       => $saleDate,
                 'status'          => 'pending',
@@ -155,6 +199,26 @@ class DailySalesImport implements
         }
     }
 
+    /**
+     * Return true when an identical row already exists in import_rows.
+     *
+     * Option B (default): matches on sale_date + product_code + quantity.
+     * Option A: switch the body below to only check sale_date.
+     */
+    protected function rowAlreadyExists(string $saleDate, string $productCode, float $quantity): bool
+    {
+        return ImportRow::where('sale_date', $saleDate)
+            ->where('product_code', $productCode)
+            ->where('quantity', $quantity)
+            ->exists();
+
+        // ----- Option A alternative (date-only match) -----
+        // return ImportRow::where('sale_date', $saleDate)->exists();
+    }
+
+    /* -------------------------------------------------------------------
+     |  Date parsing
+     * ------------------------------------------------------------------ */
     protected function parseDate(?string $dateString): string
     {
         if (empty($dateString)) {
@@ -192,6 +256,9 @@ class DailySalesImport implements
         return 1000;
     }
 
+    /* -------------------------------------------------------------------
+     |  Failure / error handlers
+     * ------------------------------------------------------------------ */
     public function onFailure(Failure ...$failures): void
     {
         foreach ($failures as $failure) {
@@ -206,18 +273,12 @@ class DailySalesImport implements
         $this->skippedCount++;
     }
 
-    public function getStagedCount(): int
-    {
-        return $this->stagedCount;
-    }
-
-    public function getSkippedCount(): int
-    {
-        return $this->skippedCount;
-    }
-
-    public function getErrors(): array
-    {
-        return $this->errors;
-    }
+    /* -------------------------------------------------------------------
+     |  Getters (used by the controller)
+     * ------------------------------------------------------------------ */
+    public function getStagedCount(): int    { return $this->stagedCount; }
+    public function getSkippedCount(): int   { return $this->skippedCount; }
+    public function getDuplicateCount(): int { return $this->duplicateCount; }
+    public function getExcludedCount(): int  { return $this->excludedCount; }
+    public function getErrors(): array        { return $this->errors; }
 }

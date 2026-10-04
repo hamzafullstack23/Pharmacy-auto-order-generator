@@ -70,9 +70,11 @@ class SalesImportController extends Controller
 
             $batch->update([
                 'stats' => [
-                    'staged'  => $import->getStagedCount(),
-                    'skipped' => $import->getSkippedCount(),
-                    'errors'  => $import->getErrors(),
+                    'staged'     => $import->getStagedCount(),
+                    'skipped'    => $import->getSkippedCount(),
+                    'duplicates' => $import->getDuplicateCount(),
+                    'excluded'   => $import->getExcludedCount(),
+                    'errors'     => $import->getErrors(),
                 ],
             ]);
 
